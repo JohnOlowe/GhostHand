@@ -166,6 +166,12 @@ STAMP="$(date -u '+%Y-%m-%d %H:%M UTC')"
 if [ -n "$DEBUG_APK" ]; then
   DEBUG_SHA256="$(sha256_of "$DEBUG_APK")"
   DEBUG_SIZE="$(size_of "$DEBUG_APK")"
+  APK_COUNT_WORD="two APKs"
+else
+  # (${VAR:-default} expands to the variable's *value* when it is set, not the word -
+  # which is how the generated README first read "exactly twoapp/build/app-debug.apk
+  # APK(s)". A second variable is clearer than nesting the same one twice.)
+  APK_COUNT_WORD="one APK"
 fi
 
 # ------------------------------------------------------------- build the branch
@@ -199,7 +205,7 @@ cat > "$README_FILE" <<EOF
 # GhostHand - build artifacts (generated, do not edit)
 
 This branch exists only to hand out the APKs. It is **replaced on every publish** and
-therefore always has exactly **one commit** and exactly **${DEBUG_APK:+two}${DEBUG_APK:-one} APK(s)**.
+therefore always has exactly **one commit** and exactly **$APK_COUNT_WORD**.
 That is on purpose: build output must never accumulate in the source history, or every
 clone would drag along every APK ever built.
 
