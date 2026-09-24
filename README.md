@@ -545,6 +545,16 @@ the R8-shrunk release build is **one**. So:
 combination anyway - "Cannot fit requested classes in a single dex file" - so the failure
 mode is a hard error rather than a silent one. Belt and braces.)
 
+### 5. The libraries have to agree with the floor too
+
+The app is not the only thing with a `minSdkVersion`: every AAR has one, and Gradle merges
+all of them into the app's manifest, so a library built for 21 would raise the whole app's
+floor. This toolchain has no Gradle and links only the app manifest, so nothing would have
+noticed - the APK would keep claiming 4.4 while shipping code that was never tested there.
+`toolchain/aar_floor.py` closes that hole: it reads the 46 vendored AAR manifests and fails
+the build if any asks for more than `MIN_API`. All 46 declare **14**, so this app's floor is
+its own, not inherited.
+
 Related: **v1 (JAR) signing is mandatory below Android 7.0**. The APKs here are signed with
 the v2/v3 schemes, which a 4.4 device cannot read at all - it would refuse installation
 with `INSTALL_PARSE_FAILED_NO_CERTIFICATES`. `toolchain/lib.sh` switches v1 signing on

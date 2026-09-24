@@ -100,6 +100,11 @@ else
   bash toolchain/androidx.sh
 fi
 
+# A library may not ask for a newer platform than the APK promises. Gradle would catch
+# this by merging every AAR manifest into the app's; there is no Gradle here, and the
+# link step only sees the app manifest, so the audit is explicit.
+python3 toolchain/aar_floor.py "$MIN_API"
+
 if [ "$RUN_TESTS" = "1" ]; then
   bold "3/5 unit tests"
   bash toolchain/test.sh app --source "$SOURCE"

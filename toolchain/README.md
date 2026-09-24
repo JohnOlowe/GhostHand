@@ -80,6 +80,11 @@ manifest's own `minSdkVersion` - because Dalvik loads one dex file and a `minSdk
 with a second one is broken on exactly the phones it claims to support. It also understands
 that aapt2 version-qualifies a resource when a newer attribute is involved.
 
+`toolchain/aar_floor.py` is about the floor the *libraries* ask for: it reads each vendored
+AAR's own `minSdkVersion` and fails the build if one needs a newer platform than the app
+claims. Gradle would have caught this while merging manifests; here the link step sees only
+the app manifest, so it is checked explicitly.
+
 `check_api.py` (repo root) is about API levels: it parses each class file's constant pool
 and checks every `android.*` and `java.*` reference against a real `android.jar` of the
 minimum level, resolving inherited methods the way the JVM does. Anything that genuinely
