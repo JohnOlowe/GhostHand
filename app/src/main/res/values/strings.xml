@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GhostHand</string>
+
+    <!-- ============================ role picker =========================== -->
+    <string name="main_title">GhostHand</string>
+    <string name="main_subtitle">One phone becomes the screen. The other becomes the hands.</string>
+    <string name="main_host_title">Host — mirror this phone</string>
+    <string name="main_host_body">Captures this screen with MediaProjection, encodes it to H.264 and serves it over WiFi. The system will ask you to confirm screen capture.</string>
+    <string name="main_guest_title">Guest — view another phone</string>
+    <string name="main_guest_body">Finds hosts on the same network with mDNS (or an IP you type), decodes the H.264 stream and draws it full screen.</string>
+    <string name="main_footer">Milestone 1: mirroring over WiFi. TCP port %1$d, %2$d-byte frame header, H.264 payload. Touch injection lands in milestone 2.</string>
+
+    <!-- =============================== host =============================== -->
+    <string name="title_host">Host</string>
+    <string name="host_status_idle">Idle — server not started</string>
+    <string name="host_status_running">Mirroring</string>
+    <string name="host_status_error">Error</string>
+    <string name="host_address_label">Guests connect to</string>
+    <string name="host_address_unknown">not listening yet</string>
+    <string name="host_copy">Copy</string>
+    <string name="host_share">Share</string>
+    <string name="host_start">Start mirroring</string>
+    <string name="host_stop">Stop mirroring</string>
+    <string name="host_resolution">Capture size</string>
+    <string name="host_mode_mirror">Mirror the built-in screen (AUTO_MIRROR)</string>
+    <string name="host_mode_public">Act as a second display (PUBLIC)</string>
+    <string name="host_copied">Address copied</string>
+    <string name="host_share_subject">GhostHand host address</string>
+    <string name="host_no_address">No WiFi address yet — are you connected to a network or hotspot?</string>
+    <string name="host_log_title">Log</string>
+    <string name="host_hint">Android shows a system dialog asking you to confirm screen capture. The stream keeps running when you leave this screen - stop it from the notification.</string>
+    <string name="host_guest_mode">Open Guest mode on this phone</string>
+    <string name="host_guest_mode_note">Only useful for a loopback smoke test: you cannot watch this phone\'s own screen on it, because opening Guest mode hides the Host screen you are mirroring.</string>
+    <string name="host_permission_denied">Screen capture permission denied</string>
+    <string name="host_notification_denied">Notification permission denied - the mirroring notification will be hidden, but the stream still works</string>
+    <string name="host_stat_fps">fps</string>
+    <string name="host_stat_bitrate">kbps</string>
+    <string name="host_stat_clients">guests</string>
+    <string name="host_stat_dropped">dropped</string>
+
+    <string-array name="host_resolution_options">
+        <item>480 — longest side 480 px</item>
+        <item>720 — longest side 720 px</item>
+        <item>1280 — longest side 1280 px (default)</item>
+        <item>1920 — longest side 1920 px</item>
+        <item>Native — full panel size</item>
+    </string-array>
+
+    <!-- =============================== guest ============================== -->
+    <string name="title_guest">Guest</string>
+    <string name="guest_status_idle">Not connected</string>
+    <string name="guest_status_discovering">Searching for hosts…</string>
+    <string name="guest_status_connecting">Connecting…</string>
+    <string name="guest_status_connected">Connected</string>
+    <string name="guest_hint_ip">Host IP, e.g. 192.168.1.42</string>
+    <string name="guest_connect">Connect</string>
+    <string name="guest_disconnect">Disconnect</string>
+    <string name="guest_discovered_none">No hosts found yet. Make sure the host is mirroring and both phones are on the same WiFi, or type the IP shown on the host.</string>
+    <string name="guest_log_title">Log</string>
+    <string name="guest_waiting_video">Waiting for the video stream…</string>
+    <string name="guest_bad_ip">That does not look like an IP address</string>
+
+    <!-- ============================ notification ========================== -->
+    <string name="notif_channel_name">Screen mirroring</string>
+    <string name="notif_channel_desc">Shown while GhostHand is capturing and serving this screen</string>
+    <string name="notif_title">GhostHand is mirroring this screen</string>
+    <string name="notif_starting">Starting capture…</string>
+    <string name="notif_running">Streaming to guests</string>
+    <string name="notif_stop">Stop</string>
+
+    <!-- ================================= nsd ============================== -->
+    <string name="nsd_service_name">GhostHand</string>
+</resources>

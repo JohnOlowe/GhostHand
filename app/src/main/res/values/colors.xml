@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark-first palette: a mirroring app is mostly black video, so the chrome
+         should not fight it. -->
+    <color name="bg">#0E1116</color>
+    <color name="surface">#171C24</color>
+    <color name="surface_alt">#1E242E</color>
+    <color name="border">#2A323D</color>
+
+    <color name="accent">#3DDC97</color>
+    <color name="accent_dim">#1F6E4C</color>
+    <color name="warn">#FFB020</color>
+    <color name="error">#FF5C5C</color>
+
+    <color name="text_primary">#E8EDF2</color>
+    <color name="text_secondary">#95A0AD</color>
+
+    <color name="video_background">#000000</color>
+
+    <color name="dot_idle">#5A6672</color>
+    <color name="dot_active">#3DDC97</color>
+    <color name="dot_error">#FF5C5C</color>
+</resources>

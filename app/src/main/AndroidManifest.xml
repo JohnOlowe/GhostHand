@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The `package` attribute is the application ID. Gradle normally injects it from
+  applicationId in build.gradle, but aapt2 (the toolchain build) reads it from
+  here, so it is stated explicitly and the two agree: damjay.control.ghosthand.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    package="damjay.control.ghosthand">
+
+    <!-- ============================ PERMISSIONS ============================ -->
+
+    <!-- Sockets: the host listens on a TCP port, the guest dials it. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Reading WiFi state / interfaces so the host can print "connect to 192.168.x.x". -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+    <!-- MediaProjection has to live inside a foreground service (Android 10+). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!--
+      Android 14 (API 34) split FOREGROUND_SERVICE into per-type permissions.
+      Without this exact one, startForeground(..., FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+      throws SecurityException on API 34+. On API 26-33 the permission is ignored.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- Android 13+ needs a runtime grant to show the "Mirroring" notification. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Keeps the encode/send loop alive if the host screen goes dark. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <application
+        android:allowBackup="false"
+        android:hardwareAccelerated="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme"
+        tools:ignore="UnusedAttribute">
+
+        <!-- ========================= ROLE PICKER ========================= -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- ============================ HOST ============================== -->
+        <!--
+          NOT orientation-locked: when the host rotates, onConfigurationChanged fires
+          in the service and we push a GEOMETRY frame so the guest can re-letterbox.
+          configChanges keeps the activity (and its log view) alive across rotation.
+        -->
+        <activity
+            android:name=".HostActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:exported="false"
+            android:label="@string/title_host" />
+
+        <!-- ============================ GUEST ============================= -->
+        <activity
+            android:name=".GuestActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:exported="false"
+            android:label="@string/title_guest" />
+
+        <!-- ======================= CAPTURE SERVICE ======================== -->
+        <!--
+          foregroundServiceType="mediaProjection" is what lets this service own the
+          MediaProjection object. Android 14+ requires:
+            1. this attribute,
+            2. the FOREGROUND_SERVICE_MEDIA_PROJECTION permission above,
+            3. startForeground() to be called BEFORE getMediaProjection().
+          exported=false: only our own activities may start it.
+        -->
+        <service
+            android:name=".host.ScreenCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+    </application>
+
+</manifest>
