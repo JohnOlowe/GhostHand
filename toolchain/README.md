@@ -52,6 +52,11 @@ check.sh DIR [--api N] [--min-api N] [--source N] [--no-dex] [--no-xml-lint]
 test.sh  DIR [--source N] [--filter SomeTest] [--no-androidx]
 ```
 
+Without `--release` the build is a debug build in both senses: D8 instead of R8, **and**
+`android:debuggable="true"` — `aapt2 link --debug-mode` sets that, which is what AGP does
+for a debug variant. Leave it out and you get an APK that is merely unshrunk: no attachable
+debugger, no `run-as`, and nothing in logcat indicating it is debuggable.
+
 ## AndroidX (optional, automatic once installed)
 
 `toolchain/androidx.sh` builds `vendor/androidx/`:

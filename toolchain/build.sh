@@ -66,8 +66,14 @@ info "$(unzip -l "$STAGE/res.zip" | tail -1 | awk '{print $2}') compiled resourc
 msg "3/7 aapt2 link (manifest + resources -> base APK, emit R.java)"
 RES_ZIP="$STAGE/res.zip"
 rm -f "$UNSIGNED"
+# AGP marks a debug build android:debuggable="true"; aapt2 only does it when asked, and
+# without it the "debug" APK is merely unshrunk - no attachable debugger, no `run-as`,
+# nothing in logcat saying it is debuggable. Same flag, so ask for it explicitly.
+LINK_EXTRA=()
+[ "$RELEASE" = 1 ] || LINK_EXTRA+=(--debug-mode)
 aapt2_link "$UNSIGNED" "$STAGE/gen" --min-sdk-version "$MIN_API" --target-sdk-version "$TARGET_API" \
-  --version-code "${VERSION_CODE:-1}" --version-name "${VERSION_NAME:-1.0}"
+  --version-code "${VERSION_CODE:-1}" --version-name "${VERSION_NAME:-1.0}" \
+  "${LINK_EXTRA[@]+"${LINK_EXTRA[@]}"}"
 
 # 4. Java -------------------------------------------------------------------
 msg "4/7 ECJ compile Java ($(count_java) sources + generated R.java)"

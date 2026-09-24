@@ -30,9 +30,12 @@ bash build.sh                 # setup + AndroidX + 63 unit tests + signed APK (~
 
 `build.sh` installs the toolchain into `toolchain/vendor` (JRE, Eclipse compiler, aapt2,
 D8/R8, apksigner) and harvests AndroidX into `toolchain/vendor/androidx`, then produces a
-**signed, zip-aligned, R8-shrunk APK** at `app/build/app.apk` (2.2 MB).
+**signed, zip-aligned, R8-shrunk APK** at `app/build/app.apk` (2.2 MB). Want both
+configurations - the shrunk one and the unobfuscated one - in one go?
 
 ```bash
+bash build.sh --both          # + app/build/app-debug.apk (5.4 MB, debuggable)
+
 adb install -r app/build/app.apk     # on BOTH phones
 ```
 
@@ -48,27 +51,43 @@ The APK is a few megabytes and different on every build. Committing it to `main`
 a new, non-delta-compressible blob to history on every push, so `git clone` would
 eventually drag along every APK ever built.
 
-So the APK lives on its own branch, and **each publish replaces that branch with a single
+So the APKs live on their own branch, and **each publish replaces that branch with a single
 parentless commit**:
 
 ```
- apk:  *                                     <- always exactly 1 commit, 1 APK
+ apk:  *                                     <- always exactly 1 commit, both APKs
  main: *---*---*---*---*---*---*             <- source history, never a binary
 ```
 
-```bash
-# get the current build: one fetch, one file
-git fetch origin apk
-git show FETCH_HEAD:GhostHand.apk > GhostHand.apk
+**Two builds, both in that one commit:**
 
-# publish a new one (force-pushes one orphan commit over the last)
+| | file | what it is |
+|---|---|---|
+| **2.2 MB** | `GhostHand.apk` | the **release** build - R8 shrunk, renamed and inlined. What to install. |
+| **5.4 MB** | `GhostHand-debug.apk` | the **debug** build - nothing shrunk, nothing renamed, and genuinely `android:debuggable` (real class names in a stack trace, `run-as`, attachable debugger). |
+
+Both are the *same app*: same package, same versionCode, same key, same signature scheme -
+so **either one installs straight over the other, in either order**, keeping your data.
+Whichever downloads more reliably for you is the right one to take.
+
+```bash
+# get the current builds: one fetch, both files
+git fetch origin apk
+git show FETCH_HEAD:GhostHand.apk > GhostHand.apk                 # smaller
+git show FETCH_HEAD:GhostHand-debug.apk > GhostHand-debug.apk     # bigger, unobfuscated
+
+# publish a new pair (force-pushes one orphan commit over the last)
 bash build.sh --publish
 ```
 
 `publish-apk.sh` builds the commit with git plumbing (`hash-object` -> `mktree` ->
 `commit-tree`, pushed with `--force`), so nothing in your working tree is touched and the
-branch can never grow a second commit. It also refuses to publish an APK whose signature
-does not verify, and writes the SHA-256 into the branch's README.
+branch can never grow a second commit. It refuses to publish an APK that fails the structural
+check, or one whose signature does not verify, and it **refuses the pair outright if the two
+would not be installable over each other** - it compares the package name, the versionCode
+and the signing certificate before writing anything, because a mismatch there is
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE` on the phone, which is a bad place to discover it. It
+writes both SHA-256s into the branch's README.
 
 Every APK - from any branch, any machine - is signed with the same key
 (`keystore/damjay_debug.keystore`, the PalmPay-Clone stable key), so a new build **installs
@@ -102,7 +121,16 @@ bash toolchain/check.sh  app         # fast "does it compile?" loop (~20 s)
 bash toolchain/test.sh   app         # JUnit unit tests (~2 s, no device needed)
 bash toolchain/build.sh  app --release --verify
 python3 verify_apk.py    app/build/app.apk   # did R8 keep what the app needs?
+bash build.sh --both                         # release + debug APKs
 ```
+
+Two things AGP would have done for you are done explicitly here, because there is no AGP:
+`app/proguard.pro` carries the keep rules R8 needs
+([why](#r8-and-the-keep-rules-nobody-generated-for-us)), and a non-release build passes
+`--debug-mode` to `aapt2` so the "debug" APK really is `android:debuggable="true"`. Without
+that flag it is only *unshrunk* - no attachable debugger, no `run-as`, nothing in logcat
+saying it is debuggable - which is a trap when the whole point of the file is being able to
+see what it is doing.
 
 `toolchain/README.md` documents each script; `RECIPE.md` explains where the tools come from
 and which routes are dead ends. This is the supported build path - it runs identically on a
