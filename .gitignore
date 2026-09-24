@@ -1,0 +1,9 @@
+# toolchain download cache / installed tools (recreated by toolchain/setup.sh)
+toolchain/vendor/
+toolchain/env.sh
+
+# build outputs
+sample/build/
+build/
+*.apk
+*.dex
