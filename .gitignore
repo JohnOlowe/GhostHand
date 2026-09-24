@@ -1,9 +1,10 @@
-# toolchain download cache / installed tools (recreated by toolchain/setup.sh)
+# toolchain download cache / installed tools (recreated by setup.sh + androidx.sh)
 toolchain/vendor/
 toolchain/env.sh
 
 # build outputs
-sample/build/
+*/build/
 build/
 *.apk
 *.dex
+*.idsig

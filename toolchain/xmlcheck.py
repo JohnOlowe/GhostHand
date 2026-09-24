@@ -11,9 +11,10 @@ pre-flight pass, using nothing but the standard library:
     android:exported present where API 31+ demands it, duplicate activity names
   * resource files: duplicate <string>/<color>/... names, empty values
   * `@type/name` and `@+id/name` references resolve to something that exists
+    (add --extra-res DIR for library resources, e.g. AndroidX AAR res/ dirs)
 
 Usage:
-    python3 xmlcheck.py PROJECT_DIR [PROJECT_DIR ...]
+    python3 xmlcheck.py PROJECT_DIR [PROJECT_DIR ...] [--extra-res DIR ...]
     python3 xmlcheck.py --json PROJECT_DIR
 Exit code: 0 clean, 1 problems found, 2 bad usage.
 """
@@ -66,15 +67,23 @@ def find_res_dirs(root_dir):
     return [d for d in candidates if os.path.isdir(d)]
 
 
-def collect_resources(root_dir):
-    """{resource_type: {name: (file, line)}} for every resource in the project."""
+def collect_resources(root_dir, extra_res_dirs=()):
+    """{resource_type: {name: (file, line)}} for every resource in the project.
+
+    extra_res_dirs are *library* resource directories (AndroidX AARs). They are
+    indexed so that `@style/Theme.Material3...` resolves, but the project's own
+    definitions win and library files are never reported as duplicates.
+    """
     found = {}
     for res_dir in find_res_dirs(root_dir):
         found = _scan_res_dir(res_dir, found)
+    for res_dir in extra_res_dirs:
+        if os.path.isdir(res_dir):
+            found = _scan_res_dir(res_dir, found, override=False)
     return found
 
 
-def _scan_res_dir(res_dir, found):
+def _scan_res_dir(res_dir, found, override=True):
     for dirpath, _dirs, files in os.walk(res_dir):
         rel = os.path.relpath(dirpath, res_dir)
         leaf = rel.split(os.sep)[0]
@@ -94,12 +103,19 @@ def _scan_res_dir(res_dir, found):
                         # <item type="string" name="x">
                         rtype = child.get("type") if child.tag in ("item", "public") else child.tag
                         if rtype and rtype not in ("public", "overlayable", "macro", "staging-public-group"):
-                            found.setdefault(rtype, {})[resname] = (path, 0)
+                            _add(found, rtype, resname, path, override)
             else:
                 typ, base = leaf, name[:-4]
                 if leaf in FILE_RES_TYPES:
-                    found.setdefault(typ, {})[base] = (path, 0)
+                    _add(found, typ, base, path, override)
     return found
+
+
+def _add(found, rtype, name, path, override):
+    """Register one resource; library passes may not clobber project entries."""
+    bucket = found.setdefault(rtype, {})
+    if override or name not in bucket:
+        bucket[name] = (path, 0)
 
 
 def _wellformed(path):
@@ -302,7 +318,7 @@ def _check_values_dir(res_dir, problems):
                                             "<string name=%r> contains an unescaped apostrophe" % rname))
 
 
-def run(root_dirs, as_json=False):
+def run(root_dirs, as_json=False, extra_res_dirs=()):
     all_problems = []
     for root_dir in root_dirs:
         if not os.path.isdir(root_dir):
@@ -310,7 +326,7 @@ def run(root_dirs, as_json=False):
             continue
         problems = []
         n_xml = check_xml_files(root_dir, problems)
-        res_index = collect_resources(root_dir)
+        res_index = collect_resources(root_dir, extra_res_dirs)
         check_values(root_dir, problems)
         check_manifest(root_dir, problems, res_index)
         check_refs(root_dir, problems, res_index)
@@ -339,9 +355,12 @@ def run(root_dirs, as_json=False):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Android XML/manifest linter")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--extra-res", action="append", default=[], metavar="DIR",
+                    help="library res/ directory to index for reference checks "
+                         "(repeatable; used for AndroidX AARs)")
     ap.add_argument("dirs", nargs="+")
     a = ap.parse_args(argv)
-    return run(a.dirs, a.json)
+    return run(a.dirs, a.json, a.extra_res)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 # test.sh -- compile and RUN JVM unit tests (JUnit 4) for the pure-Java part of
 # an Android project. No Gradle, no device, no emulator.
 #
-#   bash toolchain/test.sh PROJECT_DIR [--source 8] [--filter SomeTest]
+#   bash toolchain/test.sh PROJECT_DIR [--source 8] [--filter SomeTest] [--no-androidx]
 #
 # Test sources are picked up from test/ (flat layout) or src/test/java (Gradle
 # layout). Anything that actually calls android.* at runtime cannot work here:
@@ -21,12 +21,14 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --source) JAVA_SRC_LEVEL="$2"; shift 2 ;;
     --filter) FILTER="$2"; shift 2 ;;
+    --no-androidx) ANDROIDX_OFF=1; shift ;;
     -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
     -*) die "unknown option $1" ;;
     *) PROJ_ARG="$1"; shift ;;
   esac
 done
 [ -n "$PROJ_ARG" ] || die "usage: test.sh PROJECT_DIR [--filter ClassName]"
+androidx_setup
 [ -s "$JUNIT_JAR" ] || die "no junit.jar -- re-run: bash toolchain/setup.sh"
 
 detect_layout "$PROJ_ARG"
@@ -50,8 +52,13 @@ MAIN_FILES=$(find "$SRC_DIR" -name '*.java')
 TEST_FILES=$(find "$TEST_DIR" -name '*.java')
 # android.jar is on the classpath, not the bootclasspath: tests may *reference*
 # framework types, they just cannot execute them.
+BOOT=()
+if [ "$JAVA_SRC_LEVEL" -le 8 ]; then
+  BOOT=(-bootclasspath "$ANDROID_JAR${LAMBDA_STUBS_JAR:+:$LAMBDA_STUBS_JAR}")
+fi
 "$JAVA" -jar "$ECJ_JAR" -source "$JAVA_SRC_LEVEL" -target "$JAVA_SRC_LEVEL" \
-  -encoding UTF-8 -proc:none -classpath "$ANDROID_JAR:$JUNIT_JAR:$HAMCREST_JAR" \
+  -encoding UTF-8 -proc:none "${BOOT[@]+"${BOOT[@]}"}" \
+  -classpath "$ANDROID_JAR:$JUNIT_JAR:$HAMCREST_JAR${ANDROIDX_CLASSES:+:$ANDROIDX_CLASSES}" \
   -d "$OUT/classes" $MAIN_FILES $TEST_FILES $(find "$OUT/gen" -name '*.java') \
   || die "test compilation failed"
 ok "$(find "$OUT/classes" -name '*.class' | wc -l | tr -d ' ') class files"
@@ -67,5 +74,5 @@ printf '    %s\n' $CLASSES
 
 msg "4/4 run (JUnit 4 on the bundled JRE)"
 # shellcheck disable=SC2086
-"$JAVA" -cp "$OUT/classes:$JUNIT_JAR:$HAMCREST_JAR:$ANDROID_JAR" \
+"$JAVA" -cp "$OUT/classes:$JUNIT_JAR:$HAMCREST_JAR:$ANDROID_JAR${ANDROIDX_CLASSES:+:$ANDROIDX_CLASSES}" \
   org.junit.runner.JUnitCore $CLASSES

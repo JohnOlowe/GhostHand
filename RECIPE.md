@@ -6,8 +6,9 @@ no network access except a small egress allowlist.
 
 Working implementation lives in [`toolchain/`](toolchain/) — `setup.sh`, `check.sh`,
 `build.sh`, `test.sh`, `xmlcheck.py`, `zipalign.py` — plus a runnable
-[`sample/`](sample/) app. Timings from the sandbox: **setup 10 s, check 2 s, unit
-tests 2 s, APK build 6 s.**
+[`sample/`](sample/) app and an AndroidX one, [`sample-androidx/`](sample-androidx/).
+Timings from the sandbox: **setup 10 s, check 2 s, unit tests 2 s, APK build 6 s;
+AndroidX fetch + fuse 35 s (one-off), AndroidX APK build 50 s (Debug) / 39 s (R8).**
 
 ---
 
@@ -25,6 +26,7 @@ tests 2 s, APK build 6 s.**
 | Disassemble/verify an APK | **apktool 2.4.1** | npm `apktool-jar` |
 | Run unit tests on the JVM | **JUnit 4.13.2 + Hamcrest** | npm `@vscjava/java-language-server` |
 | Android XML lint before compiling | `xmlcheck.py` | this repo (stdlib only) |
+| **AndroidX** (appcompat, material, recyclerview, …) | **69 real AARs → one classpath jar + compiled resources + R classes** | a committed Gradle cache on GitHub (section 9) |
 
 `bash toolchain/setup.sh` fetches all of it (~170 MB, 10 s), verifies every tool by
 running it, and writes `toolchain/env.sh`.
@@ -226,6 +228,108 @@ whole Android platform jar inside a Bun-to-APK package were all found that way.
 
 ---
 
+## 9. AndroidX without Maven (appcompat, material, recyclerview, …)
+
+Maven is dead here. `maven.google.com`, `repo.maven.apache.org`, `jitpack.io`,
+`search.maven.org`, `central.sonatype.com`, Aliyun/Huawei/Tencent mirrors,
+`cdn.jsdelivr.net`, `unpkg.com`, `dl.google.com/dl/android/maven2`,
+`storage.googleapis.com`, `repo.gradle.org`, `android.googlesource.com`,
+`gitlab.com` and `bitbucket.org` **all answer 000**. AndroidX normally arrives from
+one of those hosts, so it has to be found somewhere else entirely.
+
+### 9.1 Where the bytes actually are
+
+GitHub *is* reachable, and people commit their resolved Gradle cache to their repos.
+Search for a Maven filename that only exists inside a cache:
+
+```bash
+gh api -f q='filename:appcompat-1.6.1.pom' /search/code --jq '.items[]|.repository.full_name' | sort -u
+```
+
+One hit is the source of record: **`AuntiSaha/weather_app`** — 616 committed files
+that are literal `~/.gradle/caches/modules-2/files-2.1/...` contents, **69 AARs and
+10 jars, real blobs, no Git-LFS**. Fetch only what you need with a blobless clone:
+
+```bash
+git clone --depth 1 --filter=blob:none --no-checkout https://github.com/AuntiSaha/weather_app.git src
+cd src && git checkout HEAD -- '*.aar'      # 34 s, 11 MB of working tree -> 69 AARs
+```
+
+Dead ends worth not repeating: repos that store their AARs with **Git-LFS** are
+useless (the batch API returns 200 and a download URL, but the media host answers
+000 — same for `media.githubusercontent.com`); the AOSP *prebuilts/maven_repo*
+mirrors committed to git (`TinkerBoard-Android`, `msft-mirror-aosp`, …) stop at
+AndroidX `1.0.0-alpha/beta01`; Chaquopy's AndroidX wheels are `.pyi` type stubs only;
+ROM app repos vendor camera/coil/material AARs, never a general closure.
+
+### 9.2 Turn AARs into something ECJ/aapt2/D8 understand
+
+An AAR is a zip of `classes.jar`, `res/`, `R.txt`, `AndroidManifest.xml`. AGP's job
+— mostly undocumented — is to (a) put every `classes.jar` on the classpath (b) compile
+every `res/` and merge the tables and (c) **give each library its `R` class**, because
+AndroidX AARs ship `R.txt` with `0x0` placeholders and *no `R.class` at all*.
+
+```bash
+python3 toolchain/extract_aar.py  src  vendor/androidx/aar          # explode (adds manifest package + R.txt)
+python3 toolchain/androidx_assemble.py --stage vendor/androidx/aar \
+        --jars src --out vendor/androidx --aapt2 toolchain/vendor/aapt2
+```
+
+`androidx_assemble.py` produces:
+
+| output | what it is | who consumes it |
+|---|---|---|
+| `androidx.jar` | all `classes.jar` merged into one fat jar | ECJ `-classpath`, D8/R8 **program input** |
+| `res/*.zip` | one `aapt2 compile` zip per library | `aapt2 link -R …` per library |
+| `packages.txt` | the 46 library package names | `aapt2 link --extra-packages …` |
+
+`--extra-packages` is the trick that matters: aapt2 then emits a **correct `R.java`
+per library** (`androidx/appcompat/R.java`, `com/google/android/material/R.java`, …,
+45 000 lines for appcompat) *including populated `styleable` arrays* — the thing a
+hand-written R stub gets wrong. Material's own code compiles against it unmodified.
+
+### 9.3 The last brick: `core-lambda-stubs.jar`
+
+`-source 8` + any lambda dies on `java.lang.invoke.LambdaMetafactory`, which
+`android.jar` does not contain (AOSP ships it separately; AGP injects
+`core-lambda-stubs.jar` from build-tools). It is a signature-only stub, so compile it
+locally with ECJ and put it on the bootclasspath:
+
+```bash
+java -jar ecj.jar -source 8 -target 8 -proc:none -bootclasspath android.jar \
+     -d stubs toolchain/lambda-stubs/java/lang/invoke/LambdaMetafactory.java
+# check.sh / build.sh then pass:  -bootclasspath android.jar:stubs
+```
+
+### 9.4 What it buys you
+
+`sample-androidx/` uses `AppCompatActivity`, `MaterialToolbar`, `MaterialButton`,
+`Snackbar`, `RecyclerView`, `ConstraintLayout`, a lifecycle `ViewModel` and a
+Material 3 theme — one layout referencing resources from four different AARs:
+
+```bash
+bash toolchain/androidx.sh                    # fetch + assemble, 35 s, 33 MB in vendor/
+bash toolchain/check.sh  sample-androidx      #  17 s  CHECK PASSED   (R classes + ECJ)
+bash toolchain/test.sh   sample-androidx      #   7 s  OK (3 tests)   (JUnit on the JRE)
+bash toolchain/build.sh  sample-androidx --verify            # 50 s -> 5.4 MB APK, 6 dex, 50 168 methods
+bash toolchain/build.sh  sample-androidx --release --verify  # 39 s -> 1.6 MB APK after R8 shrinking
+```
+
+Every claim above is checked by a different tool: `aapt2 dump badging`, `apksigner
+verify`, `zipalign -c`, and `apktool d` decoding 5 467 `.smali` files back out of the
+APK — including `smali/androidx/appcompat/**`. AndroidX is applied automatically when
+a project mentions `androidx.`, `Theme.AppCompat`, `Theme.Material3`,
+`MaterialComponents` or `com.google.android.material` (so the plain `sample/` stays a
+2 s, 8 KB-dex build); `--no-androidx` / `GH_ANDROIDX=off` opts out.
+
+Known limits: library `<provider>`/`<receiver>` entries are not manifest-merged
+(androidx.startup, emoji2 and profileinstaller auto-init therefore do not run — no
+crash, they simply stay dormant), resources are merged non-namespaced with
+`--auto-add-overlay`, and dependency versions are whatever the harvested cache
+contains.
+
+---
+
 ## Appendix: end-to-end, copy-pasteable
 
 ```bash
@@ -235,6 +339,11 @@ bash toolchain/setup.sh                 # ~10 s, PyPI + npm + GitHub only
 bash toolchain/check.sh  sample          # 2 s: XML lint -> aapt2 -> ECJ -> D8
 bash toolchain/test.sh   sample          # 2 s: JUnit 4 on the bundled JRE
 bash toolchain/build.sh  sample --verify # 6 s: signed, aligned, verified APK
+
+# AndroidX (one-off fetch, then it is automatic for every project that uses it):
+bash toolchain/androidx.sh               # 35 s
+bash toolchain/check.sh  sample-androidx
+bash toolchain/build.sh  sample-androidx --release --verify
 
 # a real project (flat or Gradle layout), another API level, Java 17 language mode:
 bash toolchain/setup.sh --api 35    --vendor /tmp/tc
