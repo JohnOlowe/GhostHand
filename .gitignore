@@ -8,3 +8,5 @@ build/
 *.apk
 *.dex
 *.idsig
+
+__pycache__/
