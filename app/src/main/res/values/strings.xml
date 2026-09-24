@@ -9,6 +9,8 @@
     <string name="main_host_body">Captures this screen with MediaProjection, encodes it to H.264 and serves it over WiFi. The system will ask you to confirm screen capture.</string>
     <string name="main_guest_title">Guest — view another phone</string>
     <string name="main_guest_body">Finds hosts on the same network with mDNS (or an IP you type), decodes the H.264 stream and draws it full screen.</string>
+    <string name="main_host_unavailable">Unavailable on this phone: screen capture needs Android 5.0 (API 21), and this device runs Android %1$s. Its working role is the guest - it can find another phone and control it.</string>
+    <string name="main_host_limited">Note: on Android 5.0-6.x this phone can mirror its screen but cannot be touched - gesture injection needs Android 7.0. To control a phone from this one, use the guest role.</string>
     <string name="main_footer">Milestone 1: mirroring over WiFi. TCP port %1$d, %2$d-byte frame header, H.264 payload. Touch injection lands in milestone 2.</string>
 
     <!-- =============================== host =============================== -->
@@ -83,6 +85,7 @@
     <string name="host_touch_open_settings">Open Accessibility settings</string>
     <string name="host_touch_note">Android only lets an accessibility service inject touches. Enable GhostHand touch control once and it stays on; you can switch it off in the same place.</string>
     <string name="host_touch_hint">Tap and drag on the guest to control this phone. Drags land when the finger lifts.</string>
+    <string name="host_touch_too_old">This phone runs Android %1$s. Gesture injection arrived in Android 7.0, so this phone can mirror but cannot be controlled. The guest side works on any host.</string>
 
     <!-- ============================ notification ========================== -->
     <string name="notif_channel_name">Screen mirroring</string>

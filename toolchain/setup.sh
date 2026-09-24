@@ -10,11 +10,16 @@
 set -euo pipefail
 
 API=34
+# The minimum API level the app claims to support. Its android.jar is fetched as a
+# *reference* for check_api.py (see step 6b): compiling needs API 34, but proving that
+# nothing uses a post-19 API needs API 19's own jar.
+REF_API=19
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENDOR="$HERE/vendor"
 while [ $# -gt 0 ]; do
   case "$1" in
     --api) API="$2"; shift 2 ;;
+    --ref-api) REF_API="$2"; shift 2 ;;
     --vendor) VENDOR="$2"; shift 2 ;;
     -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -172,6 +177,28 @@ print("    android.jar: %d classes%s" % (len(names), "" if not missing else " MI
 sys.exit(1 if missing else 0)
 PY
 ok "android.jar API $API ready"
+
+# ---------------------------------------------------------------------------
+say "6b/7 reference android.jar for API $REF_API  (for check_api.py)"
+
+# Compiling against API 34 says nothing about what exists on API 19: the compiler has no
+# idea what the minSdkVersion promise is, so `MediaCodec.getInputBuffer()` (API 21)
+# compiles happily into a min-api-19 dex and throws NoSuchMethodError on the device.
+# check_api.py closes that hole by checking every framework reference against a real
+# android.jar *of the minimum level*. This fetches that jar - not for compiling, purely
+# as a reference - from the same partial clone as above.
+if [ ! -s "$VENDOR/android-$REF_API.jar" ]; then
+  CLONE="$TMP/android-platforms"
+  if [ ! -d "$CLONE/.git" ]; then
+    git clone --depth 1 --filter=blob:none --no-checkout \
+      https://github.com/Sable/android-platforms.git "$CLONE" >/dev/null 2>&1 \
+      || die "could not clone Sable/android-platforms"
+  fi
+  ( cd "$CLONE" && git checkout HEAD -- "android-$REF_API/android.jar" ) \
+    || die "no android-$REF_API/android.jar in Sable/android-platforms"
+  cp "$CLONE/android-$REF_API/android.jar" "$VENDOR/android-$REF_API.jar"
+fi
+ok "android-$REF_API.jar ready ($(du -h "$VENDOR/android-$REF_API.jar" | cut -f1))"
 
 # ---------------------------------------------------------------------------
 say "7/9 language-level classpath (android.jar minus the packages the JRE owns)"

@@ -217,6 +217,14 @@ aapt2_link() {
 # ecj_compile OUT_CLASSES GEN_DIR [extra args...]   -- javac, 100% Java, no JDK
 ecj_compile() {
   local out="$1" gen="$2"; shift 2
+  # Start from an empty directory. ECJ only writes the class files its sources need,
+  # so a class whose source was refactored away stays on disk and goes on to be dexed
+  # into the APK: stale bytecode that nothing in the source explains, referencing types
+  # that may no longer exist. (Found the honest way: an anonymous class removed during
+  # the API-19 work was still being packaged, and check_api.py pointed at it because its
+  # supertype does not exist below API 24.) javac and AGP both clean their output
+  # directory; this now does too.
+  rm -rf "$out"
   mkdir -p "$out"
   local files
   files=$(find "$SRC_DIR" "$gen" -name '*.java' 2>/dev/null)

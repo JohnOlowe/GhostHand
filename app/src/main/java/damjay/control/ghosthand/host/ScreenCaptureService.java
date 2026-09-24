@@ -24,16 +24,17 @@ import android.util.Log;
 import android.view.Surface;
 import android.view.WindowManager;
 
-import java.io.IOException;
+import androidx.core.app.NotificationCompat;
+import androidx.core.app.NotificationManagerCompat;
 
 import damjay.control.ghosthand.HostActivity;
 import damjay.control.ghosthand.R;
 import damjay.control.ghosthand.net.Frame;
 import damjay.control.ghosthand.net.GhostProtocol;
-import androidx.core.app.NotificationCompat;
-import androidx.core.app.NotificationManagerCompat;
-
 import damjay.control.ghosthand.net.Record;
+import damjay.control.ghosthand.util.ApiLevels;
+
+import java.io.IOException;
 
 /**
  * The host's engine room. One foreground service owns the whole capture session:
@@ -153,6 +154,17 @@ public class ScreenCaptureService extends Service
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        // Hosting is API 21+: MediaProjection, VirtualDisplay-into-a-MediaProjection and
+        // the foreground-service mediaProjection type all arrived in Android 5.0. The
+        // activity already refuses to get here, so this is the last line of defence -
+        // a service can also be restarted by the system from an old intent.
+        if (!ApiLevels.canHost(Build.VERSION.SDK_INT)) {
+            Log.w(TAG, "screen capture requested on API " + Build.VERSION.SDK_INT
+                    + "; the host role needs API " + ApiLevels.MIN_HOST_API);
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+
         String action = intent != null ? intent.getAction() : null;
         Log.i(TAG, "onStartCommand " + action);
 
@@ -560,13 +572,23 @@ public class ScreenCaptureService extends Service
     @Override
     public void onGuestTouch(String clientName, int action, int xNormalized,
                              int yNormalized, long timeMs) {
+        if (!ApiLevels.canInject(Build.VERSION.SDK_INT)) {
+            // API 21-23: the service can be enabled in Settings but dispatchGesture()
+            // does not exist, so never even look for it. (This is also why the old
+            // "enable touch control" hint below is version-aware.)
+            return;
+        }
         InjectionAccessibilityService injector = InjectionAccessibilityService.instance();
         if (injector == null) {
             // No accessibility grant: still acknowledge the gesture so the guest's
             // user learns why nothing happens, but do not spam a log line per event.
             if (action == TouchInjector.ACTION_DOWN) {
-                log("touch from " + clientName + " ignored - enable touch control "
-                        + "(accessibility) on this phone");
+                log(ApiLevels.canInject(Build.VERSION.SDK_INT)
+                        ? "touch from " + clientName + " ignored - enable touch control "
+                          + "(accessibility) on this phone"
+                        : "touch from " + clientName + " ignored - gesture injection "
+                          + "needs Android 7.0, this phone is API "
+                          + Build.VERSION.SDK_INT);
             }
             return;
         }
@@ -645,6 +667,16 @@ public class ScreenCaptureService extends Service
     // ------------------------------- notification -----------------------------
 
     private void createNotificationChannel() {
+        // NotificationChannel itself is API 26. Until Android 8.0 there are no channels
+        // and NotificationCompat ignores the channel id we hand it, so there is nothing
+        // to create - but the constructor call still has to not happen, or a host on
+        // 5.0-7.1 dies in onCreate with NoClassDefFoundError. (This is exactly what
+        // happened when minSdk dropped below 26 and the host role became reachable on
+        // API 21: every other version-gated call in this file was already guarded, and
+        // check_api.py pointed at the one that was not.)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return;
+        }
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm == null) {
             return;

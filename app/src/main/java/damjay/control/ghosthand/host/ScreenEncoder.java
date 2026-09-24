@@ -7,6 +7,8 @@ import android.media.MediaFormat;
 import android.util.Log;
 import android.view.Surface;
 
+import damjay.control.ghosthand.util.CodecCompat;
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -229,7 +231,8 @@ public class ScreenEncoder {
 
                 ByteBuffer buffer = null;
                 try {
-                    buffer = codec.getOutputBuffer(index);
+                    // API 19 has no getOutputBuffer(index) - see CodecCompat.
+                    buffer = CodecCompat.outputBuffer(codec, index);
                     if (buffer == null || info.size <= 0) {
                         continue;
                     }

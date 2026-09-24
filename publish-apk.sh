@@ -130,6 +130,7 @@ pkg_line() { badging "$1" | sed -n '1p'; }
 # so a greedy .* would report the build-tools version instead of the app's own.
 pkg_name()  { pkg_line "$1" | sed -n "s/^package: name='\([^']*\)'.*/\1/p"; }
 pkg_code()  { pkg_line "$1" | sed -n "s/^package: name='[^']*' versionCode='\([^']*\)'.*/\1/p"; }
+min_sdk()   { badging "$1" | sed -n "s/^sdkVersion:'\([0-9]*\)'.*/\1/p"; }
 is_debug() {
   local info; info="$(badging "$1")"
   case "$info" in *application-debuggable*) return 0 ;; *) return 1 ;; esac
@@ -149,8 +150,12 @@ if [ -s "$AAPT2" ] && [ -n "$DEBUG_APK" ]; then
     exit 1
   fi
   echo "installable pair: $A_NAME v$A_CODE, both signed by"
-  echo "  $A_CERT  (release: debuggable=$(is_debug "$APK" && echo yes || echo no),"
-  echo "  debug: debuggable=$(is_debug "$DEBUG_APK" && echo yes || echo no))"
+  echo "  $A_CERT"
+  echo "  release: minSdk $(min_sdk "$APK"), debuggable=$(is_debug "$APK" && echo yes || echo no)"
+  echo "  debug:   minSdk $(min_sdk "$DEBUG_APK"), debuggable=$(is_debug "$DEBUG_APK" && echo yes || echo no)"
+  # Different minSdkValues are fine - each APK is installable over the other on any
+  # device that accepts both - but they are not the same *claim*, so they are printed
+  # rather than assumed equal.
 fi
 
 sha256_of() { sha256sum "$1" | awk '{print $1}'; }
@@ -181,15 +186,20 @@ BLOB="$(git hash-object -w "$APK")"
 # Which file is which is worth stating plainly: the debug build is the BIGGER one, so
 # "the smaller download" is the release build, not the safe fallback.
 if [ -n "$DEBUG_APK" ]; then
-  APK_TABLE="| File | Size | What it is | SHA-256 |
-|---|---|---|---|
-| \`$NAME\` | $SIZE | **release**, R8-shrunk and optimised | \`$SHA256\` |
-| \`$DEBUG_NAME\` | $DEBUG_SIZE | **debug**, unshrunk: nothing renamed, nothing removed | \`$DEBUG_SHA256\` |
+  APK_TABLE="| File | Size | Runs on | What it is | SHA-256 |
+|---|---|---|---|---|
+| \`$NAME\` | $SIZE | Android $(min_sdk "$APK")\+ | **release**, R8-shrunk and optimised, one dex file | \`$SHA256\` |
+| \`$DEBUG_NAME\` | $DEBUG_SIZE | Android $(min_sdk "$DEBUG_APK")\+ | **debug**, unshrunk: nothing renamed or removed, six dex files | \`$DEBUG_SHA256\` |
 
 Both are the same app - package \`$(pkg_name "$APK")\`, versionCode \`$(pkg_code "$APK")\`, signed
 by the same key - **so either installs straight over the other**, in either order, keeping
-your data. R8 renaming and inlining things on its way to the smaller file is the only real
-difference between them."
+your data. Two differences are worth knowing:
+
+* R8 renames and inlines things on its way to the smaller file. That is the point of it.
+* The debug build is unshrunk, so it carries whole libraries as separate dex files, and
+  Dalvik (Android 4.4) only ever loads the first one. That is why it declares Android
+  $(min_sdk "$DEBUG_APK") as its floor and the release build does not: the release build is a
+  single dex file and runs on 4.4."
   INSTALL_LIST="git show FETCH_HEAD:$NAME > GhostHand.apk             # smaller, R8-shrunk
 git show FETCH_HEAD:$DEBUG_NAME > GhostHand-debug.apk  # bigger, unobfuscated"
 else
@@ -230,7 +240,10 @@ APK installs straight over the previous one - no uninstalling, no lost settings.
   \`$DEBUG_NAME\` - nothing is renamed or removed, so a stack trace points at real class
   names and the accessibility service, encoder and protocol classes are all present as
   written. It is the bigger download and it is slower, and it logs more.
-* **Download of the big one failing:** take \`$NAME\`. Same app.
+* **Download of the big one failing:** take \`$NAME\`. Same app, same key, smaller file -
+  and it is the one that runs on the oldest phones.
+* **Android 4.4:** take \`$NAME\`. The debug build will refuse to install there
+  (INSTALL_FAILED_OLDER_SDK) because it needs the platform's multi-dex loading.
 
 ## Build them yourself
 

@@ -5,6 +5,8 @@ import android.media.MediaFormat;
 import android.util.Log;
 import android.view.Surface;
 
+import damjay.control.ghosthand.util.CodecCompat;
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -259,7 +261,8 @@ public class VideoDecoder {
                 if (item != null) {
                     int inIndex = codec.dequeueInputBuffer(10_000);
                     if (inIndex >= 0) {
-                        ByteBuffer in = codec.getInputBuffer(inIndex);
+                        // API 19 has no getInputBuffer(index) - see CodecCompat.
+                        ByteBuffer in = CodecCompat.inputBuffer(codec, inIndex);
                         if (in != null) {
                             in.clear();
                             in.put(item.data);

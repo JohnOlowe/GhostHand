@@ -36,6 +36,7 @@ Gradle layout (`src/main/AndroidManifest.xml`, `src/main/res`, `src/main/java`).
 | `filter_android_jar.py` | strips JRE-owned packages from android.jar for `-source 11/17` |
 | `lambda-stubs/` | the one class `android.jar` lacks (`LambdaMetafactory`); `setup.sh` compiles it into `vendor/core-lambda-stubs.jar` |
 | `androidx.sh` | fetches AndroidX and assembles `vendor/androidx/` (one-off, needs the network) |
+| `ecj_compile` (in `lib.sh`) | wipes its output directory first, so a class whose source was refactored away cannot linger on disk and be dexed into the APK |
 | `resolve_signing` (in `lib.sh`) | picks the keystore to sign with: `SIGN_KEYSTORE`/`SIGN_*` env vars first, then the project's `gradle.properties` + `keystore/`, then the bundled debug key |
 | `androidx_fetch.py` | blobless clone of the source repo + fetch of the selected AARs/jars |
 | `select_androidx.py` | picks the highest version of each wanted artifact, skips `-sources`/`-javadoc`/KTX/test-only |
@@ -47,15 +48,47 @@ Gradle layout (`src/main/AndroidManifest.xml`, `src/main/res`, `src/main/java`).
 ```
 build.sh DIR [--api N] [--min-api N] [--source 8|11|17|21|25] [--release]
              [--out FILE] [--verify] [--no-androidx]
+setup.sh [--api N] [--ref-api N] [--vendor DIR]
 check.sh DIR [--api N] [--min-api N] [--source N] [--no-dex] [--no-xml-lint]
              [--no-androidx] [--full-dex]
 test.sh  DIR [--source N] [--filter SomeTest] [--no-androidx]
 ```
 
+`--api` is the platform you *compile* against and does not constrain what you may call;
+`--min-api` is the promise the APK makes about where it will run. Only `setup.sh --ref-api`
+(or the root `build.sh`, which runs it) fetches the matching reference `android.jar` for
+`check_api.py`, which is what actually verifies that promise - the compiler cannot, because
+it only ever sees the newest platform.
+
 Without `--release` the build is a debug build in both senses: D8 instead of R8, **and**
 `android:debuggable="true"` — `aapt2 link --debug-mode` sets that, which is what AGP does
 for a debug variant. Leave it out and you get an APK that is merely unshrunk: no attachable
 debugger, no `run-as`, and nothing in logcat indicating it is debuggable.
+
+## Checking what the artifact promises
+
+```
+bash build.sh                       # runs both, after building
+python3 verify_apk.py  app/build/app.apk     # R8 kept what the framework looks up
+python3 check_api.py   app/build/stage/classes --min-api 19 \
+                       --android-jar toolchain/vendor/android-19.jar --apk app/build/app.apk
+```
+
+`verify_apk.py` (repo root) is about shrinking and packaging: required classes and call
+strings in the dex, required resources in the compiled XML, and the dex count against the
+manifest's own `minSdkVersion` - because Dalvik loads one dex file and a `minSdk < 21` APK
+with a second one is broken on exactly the phones it claims to support. It also understands
+that aapt2 version-qualifies a resource when a newer attribute is involved.
+
+`check_api.py` (repo root) is about API levels: it parses each class file's constant pool
+and checks every `android.*` and `java.*` reference against a real `android.jar` of the
+minimum level, resolving inherited methods the way the JVM does. Anything that genuinely
+needs a newer platform must be declared in `api-levels.txt` with its level and a reason;
+an exemption that stops being used is reported as stale. It also reads the dex to confirm
+the lambdas were desugared (`invoke-custom` must not survive below API 26).
+
+Both are run by the root `build.sh`, after the APK is signed and before anything can be
+published.
 
 ## AndroidX (optional, automatic once installed)
 

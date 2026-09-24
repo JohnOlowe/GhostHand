@@ -1,14 +1,17 @@
 package damjay.control.ghosthand;
 
 import android.content.Intent;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
 
 import damjay.control.ghosthand.net.GhostProtocol;
+import damjay.control.ghosthand.util.ApiLevels;
 
 /**
  * Entry point: pick a role.
@@ -17,6 +20,14 @@ import damjay.control.ghosthand.net.GhostProtocol;
  * is decided here - {@link HostActivity} (capture + serve) or {@link GuestActivity}
  * (discover + decode + display). Keeping both roles in one app means you install the
  * same build on two phones and never wonder which one has which flavour.
+ *
+ * <p><b>The host role is version-gated.</b> Mirroring this phone requires
+ * {@code MediaProjection}, which Android only shipped in 5.0 (API 21). On the older
+ * devices this app supports - down to 4.4 - the host card stays visible but explains
+ * itself instead of starting an activity that would fail on the consent dialog, and
+ * the guest role is untouched: finding a host, decoding the stream and sending
+ * touches needs nothing newer than API 19, so an old phone is fully usable as the
+ * controller. {@link ApiLevels} is the single place those numbers live.
  *
  * <p><b>What AndroidX changed here.</b> The activity now extends
  * {@link AppCompatActivity}, so it gets the AppCompat widget factory: every view in
@@ -41,11 +52,29 @@ public class MainActivity extends AppCompatActivity {
                 GhostProtocol.DEFAULT_PORT, GhostProtocol.HEADER_SIZE));
 
         View hostCard = findViewById(R.id.cardHost);
-        hostCard.setOnClickListener(v ->
-                startActivity(new Intent(this, HostActivity.class)));
+        if (ApiLevels.canHost(Build.VERSION.SDK_INT)) {
+            hostCard.setOnClickListener(v ->
+                    startActivity(new Intent(this, HostActivity.class)));
+            if (!ApiLevels.canInject(Build.VERSION.SDK_INT)) {
+                // Mirrors, but cannot be touched - worth saying before they try.
+                ((TextView) findViewById(R.id.txtHostBody))
+                        .setText(R.string.main_host_limited);
+            }
+        } else {
+            // Not disabled-but-mysterious: dimmed, re-labelled, and the tap explains
+            // which way round this phone does work.
+            hostCard.setAlpha(0.55f);
+            TextView body = findViewById(R.id.txtHostBody);
+            body.setText(getString(R.string.main_host_unavailable,
+                    Build.VERSION.RELEASE));
+            hostCard.setOnClickListener(v -> Toast.makeText(this,
+                    getString(R.string.main_host_unavailable, Build.VERSION.RELEASE),
+                    Toast.LENGTH_LONG).show());
+        }
 
         View guestCard = findViewById(R.id.cardGuest);
         guestCard.setOnClickListener(v ->
                 startActivity(new Intent(this, GuestActivity.class)));
     }
+
 }

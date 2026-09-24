@@ -5,10 +5,18 @@
 GhostHand streams one Android phone's screen to another over WiFi - no cables, no
 cloud, no accounts. Two phones on the same network, one APK, two roles:
 
-| | |
-|---|---|
-| **Host** | Captures its own screen (`MediaProjection`), encodes it to H.264 (`MediaCodec`) and serves it over TCP. |
-| **Guest** | Finds the host with mDNS (or an IP you type), decodes the H.264 and draws it full screen. |
+| | | |
+|---|---|---|
+| **Host** | Captures its own screen (`MediaProjection`), encodes it to H.264 (`MediaCodec`) and serves it over TCP. | Android 5.0+ |
+| **Guest** | Finds the host with mDNS (or an IP you type), decodes the H.264 and draws it full screen. | Android 4.4+ |
+| **Touch** | The guest's taps and drags are injected into the host through an `AccessibilityService`. | host needs Android 7.0+ |
+
+The version floors are not arbitrary, and they are what make an old phone useful rather
+than useless: a 4.4 phone cannot be *controlled* (synthesising input needs
+`dispatchGesture`, added in Android 7.0) and cannot *capture its own screen*
+(`MediaProjection`, added in 5.0) - but as the **controller** it needs nothing newer than
+4.4. So the oldest device on your desk can drive the newest one. See
+[Android 4.4 and the version floors](#android-44-and-the-version-floors).
 
 **Milestones 1 and 2 (this build): mirroring *and* touch.** The guest already sent touch
 events; the host now actually injects them, so dragging on the guest moves the real cursor
@@ -16,7 +24,7 @@ on the host's screen. The last hop needs a permission an ordinary app cannot hav
 whole mechanism is explained in [Touch injection](#touch-injection) - including the R8
 keep-rule trap that silently deleted it from the release APK.
 
-Package `damjay.control.ghosthand` · minSdk 26 (Android 8.0) · targetSdk 34 · Java, no Kotlin · **AndroidX + Material 3**
+Package `damjay.control.ghosthand` · **minSdk 19 (Android 4.4)** · targetSdk 34 · Java, no Kotlin · **AndroidX + Material 3**
 
 ---
 
@@ -30,11 +38,11 @@ bash build.sh                 # setup + AndroidX + 63 unit tests + signed APK (~
 
 `build.sh` installs the toolchain into `toolchain/vendor` (JRE, Eclipse compiler, aapt2,
 D8/R8, apksigner) and harvests AndroidX into `toolchain/vendor/androidx`, then produces a
-**signed, zip-aligned, R8-shrunk APK** at `app/build/app.apk` (2.2 MB). Want both
-configurations - the shrunk one and the unobfuscated one - in one go?
+**signed, zip-aligned, R8-shrunk APK** at `app/build/app.apk` (2.5 MB, Android 4.4+).
+Want both configurations - the shrunk one and the unobfuscated one - in one go?
 
 ```bash
-bash build.sh --both          # + app/build/app-debug.apk (5.4 MB, debuggable)
+bash build.sh --both          # + app/build/app-debug.apk (5.5 MB, debuggable, Android 5.0+)
 
 adb install -r app/build/app.apk     # on BOTH phones
 ```
@@ -61,14 +69,15 @@ parentless commit**:
 
 **Two builds, both in that one commit:**
 
-| | file | what it is |
-|---|---|---|
-| **2.2 MB** | `GhostHand.apk` | the **release** build - R8 shrunk, renamed and inlined. What to install. |
-| **5.4 MB** | `GhostHand-debug.apk` | the **debug** build - nothing shrunk, nothing renamed, and genuinely `android:debuggable` (real class names in a stack trace, `run-as`, attachable debugger). |
+| | file | runs on | what it is |
+|---|---|---|---|
+| **2.5 MB** | `GhostHand.apk` | **Android 4.4+** | the **release** build - R8 shrunk, renamed and inlined, one dex file. What to install. |
+| **5.5 MB** | `GhostHand-debug.apk` | Android 5.0+ | the **debug** build - nothing shrunk or renamed, genuinely `android:debuggable`, six dex files. |
 
 Both are the *same app*: same package, same versionCode, same key, same signature scheme -
 so **either one installs straight over the other, in either order**, keeping your data.
-Whichever downloads more reliably for you is the right one to take.
+Whichever downloads more reliably for you is the right one to take - and on Android 4.4 it
+has to be the release build, because the debug one needs the platform's multi-dex loading.
 
 ```bash
 # get the current builds: one fetch, both files
@@ -121,6 +130,8 @@ bash toolchain/check.sh  app         # fast "does it compile?" loop (~20 s)
 bash toolchain/test.sh   app         # JUnit unit tests (~2 s, no device needed)
 bash toolchain/build.sh  app --release --verify
 python3 verify_apk.py    app/build/app.apk   # did R8 keep what the app needs?
+python3 check_api.py app/build/stage/classes --min-api 19 \
+        --android-jar toolchain/vendor/android-19.jar --apk app/build/app.apk
 bash build.sh --both                         # release + debug APKs
 ```
 
@@ -238,6 +249,11 @@ app/src/main/java/damjay/control/ghosthand/
 │   ├── HostController.java        mDNS advertise + "my IP addresses" listing
 │   ├── TouchInjector.java         gesture planner: guest points -> one stroke - NO android.*
 │   └── InjectionAccessibilityService.java  the only thing allowed to inject input
+│                                   (every API-24 type is in its nested Api24 class)
+│
+├── util/
+│   ├── ApiLevels.java             which role each Android version can run - NO android.*
+│   └── CodecCompat.java           the one place MediaCodec's buffer API differs by version
 │
 └── guest/                       everything that runs on the phone doing the watching
     ├── GuestController.java       mDNS discovery + socket + frame dispatch
@@ -466,6 +482,121 @@ frame forever.
 
 ---
 
+## Android 4.4 and the version floors
+
+Supporting a 2013 phone is mostly a story about what *did not exist yet*, and about how
+easy it is to ship code that only fails on the device you cannot debug. Four separate
+things had to be handled.
+
+### 1. The roles have different floors
+
+| feature | needs | why |
+|---|---|---|
+| Guest / controller | **API 19** | `MediaCodec` (16), `SurfaceView` (1), `NsdManager` (16), sockets (1). Nothing modern. |
+| Host, mirroring | **API 21** | `MediaProjection` arrived in Android 5.0. Before that no app could capture the screen without root. |
+| Host, touch injection | **API 24** | `AccessibilityService.dispatchGesture()` arrived in Android 7.0. |
+
+`util/ApiLevels` holds those three numbers and is **pure Java** - it takes the SDK level as
+an `int` instead of reading `Build.VERSION.SDK_INT`, so the whole policy is testable on a
+plain JVM (`ApiLevelsTest`, six cases across the boundaries 9/19/21/23/24/35). The gates
+are then applied in three places: `MainActivity` dims the host card below 21 and explains
+itself, `HostActivity` finishes immediately in `onCreate` if it is opened anyway, and
+`ScreenCaptureService` re-checks in `onStartCommand` because Android may restart a service
+from an old intent. A 4.4 phone is therefore never inside the host code, by policy and at
+three independent points.
+
+### 2. The buffer APIs changed in 5.0
+
+```java
+codec.getInputBuffer(index)      // API 21+
+codec.getInputBuffers()[index]   // API 16-20, deprecated in 21
+```
+
+The guest decoder is the one that matters: it runs on the old phone. `util/CodecCompat`
+picks the right form from `SDK_INT`, and every call site goes through it. This is the
+AndroidX `Api21Impl` pattern - the class deliberately contains a call that does not exist
+on API 19, and the `SDK_INT` check guarantees it never executes there - and it is the only
+place in the app allowed to do that (see the checker below).
+
+### 3. `dispatchGesture` must not even be *loaded* on old platforms
+
+An `AccessibilityService` is instantiated by the framework, not by us: if the user opens
+Settings > Accessibility on a 4.4 phone, the system will construct that class. So every
+API-24 mention lives in a nested `Api24` class, which the platform only loads when a
+gesture is actually dispatched, and `inject()` returns before that on anything below
+Android 7.0. The outer class stays clean and loadable everywhere.
+
+### 4. Dalvik loads exactly one dex file
+
+This one is not about a missing API but about the runtime. Below Android 5.0 the class
+loader reads `classes.dex` and ignores every other one - real multi-dex loading arrived
+with ART in 5.0. An unshrunk build of this app is **six** dex files (AndroidX is large);
+the R8-shrunk release build is **one**. So:
+
+* the **release** APK is a single dex and genuinely runs on 4.4,
+* the **debug** APK is six dex files and declares **minSdk 21**, because claiming 19 would
+  install on KitKat and then die with `NoClassDefFoundError` the first time it touched
+  anything in the second file.
+
+`verify_apk.py` enforces the rule rather than trusting it: it reads the APK's own
+`minSdkVersion` back out of the built binary manifest and fails the build if a
+`minSdk < 21` APK ships more than one dex file. (R8 and D8 both refuse to emit that
+combination anyway - "Cannot fit requested classes in a single dex file" - so the failure
+mode is a hard error rather than a silent one. Belt and braces.)
+
+Related: **v1 (JAR) signing is mandatory below Android 7.0**. The APKs here are signed with
+the v2/v3 schemes, which a 4.4 device cannot read at all - it would refuse installation
+with `INSTALL_PARSE_FAILED_NO_CERTIFICATES`. `toolchain/lib.sh` switches v1 signing on
+automatically whenever `min-api < 24`, so this is handled, but it is the kind of thing that
+looks like a corrupt download when you hit it.
+
+### The checks that make this trustworthy
+
+There is no emulator here, so "works on API 19" had to become something checkable. Two
+tools do it, and both are wired into `build.sh`.
+
+**`check_api.py`** reads the constant pool of every compiled class, keeps the references
+into `android.*` and `java.*`, and asks a real **API 19 `android.jar`** whether each one
+exists. Method and field lookups walk the superclass chain, exactly like the JVM's own
+resolution, and a call through one of our subclasses (`service.dispatchGesture(...)`) is
+followed into the framework superclass where it actually resolves. Whatever genuinely needs
+a newer platform must be *declared* in `api-levels.txt` with the level and the reason - and
+an exemption that stops being referenced is reported as stale, so the list cannot quietly
+rot.
+
+It found two real bugs the moment it ran:
+
+| found | consequence if shipped |
+|---|---|
+| `NotificationChannel` (API 26) constructed in `onCreate` with no version guard | every host on **Android 5.0-7.1** crashed the moment it started capturing |
+| `InjectionAccessibilityService$1.class`, an anonymous callback left behind by a refactor | stale bytecode in the APK - and the toolchain never cleaned the class directory, so it would have kept happening |
+
+The second one was not an API bug at all, but the tool could see it because the class
+extends a type that does not exist below API 24. The fix was in `toolchain/lib.sh`: the
+compile step now starts from an empty directory, like javac and AGP do.
+
+**`verify_apk.py`** checks the artifact instead of the source: the classes the framework
+looks up by name, the call strings that must survive shrinking, the resources, the dex
+count against the declared minSdk - and it understands that aapt2 may *version-qualify* a
+resource behind your back (it split the accessibility config into `res/xml/` and
+`res/xml-v22/` the moment minSdk dropped below 22, keeping `canPerformGestures` only in the
+copy a modern device loads, which is correct and looked like a bug for ten minutes).
+
+```
+$ bash build.sh --release
+    ok  APK VERIFY PASSED  (15 classes, 14 call strings, 5 resources present)
+    minSdkVersion 19, 1 dex file(s) - loadable on any supported device
+    ok  API CHECK PASSED  (every framework reference exists on API 19; 15 newer symbols
+        exempted in api-levels.txt, 36 lambda/desugaring references ignored)
+```
+
+**What is still unverified:** how it *feels*. `dispatchGesture` on a real 2013 phone, the
+decoder's behaviour on that phone's particular H.264 hardware, and Android 4.4's mDNS
+quirks (if discovery finds nothing, type the IP - the manual path exists for exactly
+this) are all device questions. The static checks cover the crash class, not the feel.
+
+---
+
 ## Touch injection
 
 The guest converts every touch to **normalised** coordinates and sends them; the host turns
@@ -596,14 +727,15 @@ before anything is signed or shipped.
 
 ## Tests
 
-`net/` and `host/TouchInjector` deliberately import nothing from `android.*`, so the wire
-format **and the gesture planner** can be tested on a plain JVM - no device, no emulator:
+`net/`, `host/TouchInjector` and `util/ApiLevels` deliberately import nothing from
+`android.*`, so the wire format, the gesture planner **and the version policy** can be
+tested on a plain JVM - no device, no emulator:
 
 ```bash
 bash toolchain/test.sh app --source 8
 # JUnit version 4.13.2
-# .......................................................
-# OK (63 tests)
+# .....................................................................
+# OK (69 tests)
 ```
 
 What is covered:
@@ -623,6 +755,9 @@ What is covered:
   the 40 ms/30 s duration clamps, monotonic non-decreasing offsets, point reduction past 64,
   a MOVE arriving with no DOWN, `reset()` producing a CANCEL, coordinate clamping at the
   screen edges, and a full scroll round trip from one normalised `MOVE` to one stroke.
+* `ApiLevelsTest` (6 tests) - the version policy at every boundary: 9 is unsupported, 19
+  and 20 are guest-only, 21-23 mirror without being controllable, 24 is the first that does
+  everything, 24 through 35 all can.
 
 **What cannot be tested here:** anything that needs the Android runtime (ART) - and that now
 includes `dispatchGesture` itself. There is no emulator in this environment, so
@@ -643,6 +778,10 @@ phones.
 | "that does not look like an IP address" | the guest needs `192.168.x.x`, not a hostname. |
 | Black screen in a secure app | expected: `AUTO_MIRROR` is distrusted by the system for banking/DRM windows. Switch the host to `PUBLIC` mode. |
 | Picture freezes and then recovers | the decoder dropped a frame and is waiting for the next key frame (2 s). `dropped` in the guest's stats tells you it happened. |
+| `INSTALL_PARSE_FAILED_NO_CERTIFICATES` on an old phone | the APK has no v1 (JAR) signature, which is all Android 6.0 and older understand. `toolchain/lib.sh` enables it automatically when `min-api < 24`; a build made with a higher `--min-api` will not install there. |
+| `INSTALL_FAILED_OLDER_SDK` on Android 4.4 | you are installing the **debug** APK, which declares minSdk 21 (six dex files, and Dalvik loads one). Use the release APK. |
+| `NoClassDefFoundError` right after installing | usually the multi-dex trap: a `minSdk < 21` APK with a `classes2.dex` is broken on Dalvik. `verify_apk.py` fails the build for exactly this. |
+| Touch does nothing, host is Android 5.0-6.x | injection needs Android 7.0. The host dashboard says so instead of offering the switch. |
 | `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | you are installing an APK signed with a different key. Every build here uses `keystore/damjay_debug.keystore`; delete the old app once and carry on. |
 | Notification missing on Android 13+ | `POST_NOTIFICATIONS` was denied. The stream still works; only the notification is hidden. |
 | `LambdaMetafactory cannot be resolved` | `toolchain/vendor/core-lambda-stubs.jar` is missing - re-run `bash toolchain/setup.sh`. |
@@ -669,6 +808,8 @@ keystore/                   the stable debug key every build is signed with
 gradle.properties           signing credentials (single source of truth)
 build.sh                    one command: setup -> AndroidX -> tests -> signed APK -> verify it
 verify_apk.py               assert R8 kept the classes/calls/resources the app needs
+check_api.py                assert every framework call exists on minSdk (API 19)
+api-levels.txt              the declared exemptions, each with a level and a reason
 publish-apk.sh              push the APK to the single-commit `apk` branch
 RECIPE.md                   how the SDK-less toolchain was assembled, and what fails
 sample/                     toy framework-only project used as a toolchain smoke test
@@ -677,15 +818,21 @@ sample-androidx/            toy AndroidX project: AppCompat + Material 3 + Recyc
 
 ## Roadmap
 
-1. **Mirroring** - done.
-2. **Touch injection** - done: single-finger taps and drags through
+1. **Mirroring** - done, from Android 5.0 on the host side.
+2. **Controller support down to Android 4.4** - done: the guest half uses nothing newer
+   than API 19, and `check_api.py` proves it holds (no exemptions are attributed to
+   `guest/*` or `net/*`). Hosting is 5.0+, injection is 7.0+, and the UI says so.
+3. **Touch injection** - done: single-finger taps and drags through
    `AccessibilityService.dispatchGesture()`. A drag is dispatched on lift (see
    [Touch injection](#touch-injection)); live streaming of a drag needs a root or adb helper.
-3. **Multi-touch, pressure and hardware keys** - the `TOUCH` record already reserves a
+4. **Multi-touch, pressure and hardware keys** - the `TOUCH` record already reserves a
    `pointer` field, and `GestureDescription` supports several strokes at once, so pinch/zoom is
    a `TouchInjector` change plus a guest-side pointer-id map.
-4. **Audio** - `AudioPlaybackCapture` on the host, `AudioTrack` on the guest, same `ClientHub`
-   fan-out.
-5. **Hardening** - the protocol is plaintext and unauthenticated on a trusted LAN; a pairing
+5. **Audio** - `AudioPlaybackCapture` on the host (API 29+), `AudioTrack` on the guest, same
+   `ClientHub` fan-out.
+6. **On-device verification** - there is no emulator in this environment, so the pieces only a
+   real phone can settle are still open: how a `dispatchGesture` drag feels, whether a 2013
+   decoder likes the stream we produce, and 4.4's flaky mDNS.
+7. **Hardening** - the protocol is plaintext and unauthenticated on a trusted LAN; a pairing
    step and TLS would be the next step before this is used anywhere else. Touch injection
    raises the stakes: an unauthenticated guest can now drive the host.

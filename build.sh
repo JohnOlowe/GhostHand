@@ -7,9 +7,14 @@
 #   bash build.sh --quick      skip the unit tests
 #   bash build.sh --both       build BOTH configurations into separate files
 #
-# --release (default) -> app/build/app.apk            R8-shrunk, ~2.2 MB - what to install
-# --debug             -> app/build/app-debug.apk      unshrunk + debuggable, ~5.4 MB
+# --release (default) -> app/build/app.apk            R8-shrunk, 2.2 MB, API 19+ (one dex)
+# --debug             -> app/build/app-debug.apk      unshrunk + debuggable, API 21+ (six)
 # --both              -> app/build/app.apk + app/build/app-debug.apk
+
+# The release build is the one that runs on Android 4.4: it is a single classes.dex, and
+# Dalvik cannot load a second one without the multidex library. verify_apk.py enforces
+# that invariant, so a release that grows past 64K methods fails the build here rather
+# than on the phone.
 #
 # app/build/app.apk is ALWAYS the release build - the debug one never overwrites it - so
 # the two files cannot be confused by a later publish.
@@ -31,7 +36,19 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 
 API=34
-MIN_API=26
+# Android 4.4 (API 19) is the floor, and it is the interesting one: a 4.4 phone cannot
+# capture its own screen (MediaProjection is API 21) and cannot be touched
+# (dispatchGesture is API 24), but as the *guest* it needs nothing newer - so an old
+# phone makes a first-class controller for a modern one. ApiLevels holds that policy.
+MIN_API=19
+# The debug configuration is dexed with a higher floor on purpose. R8 shrinks the
+# release build into a single classes.dex, which Dalvik (API < 21) can load; the
+# unshrunk debug build is ~6 dex files and Dalvik only ever loads the first one, so a
+# debug APK claiming 19 would install and then die with NoClassDefFoundError. Native
+# multidex starts at 21, so that is what it declares. (It is not a preference: D8
+# refuses to emit the extra dex files below 21 without a main-dex list, because a
+# min-api-19 build must fit in one dex. The release build is checked for exactly that.)
+DEBUG_MIN_API=21
 SOURCE=8            # 8 = compile against the real Android API surface (see RECIPE.md)
 VERSION_CODE=1
 VERSION_NAME=0.2.0-androidx
@@ -92,12 +109,12 @@ fi
 
 # One configuration, one file. The debug and release APKs are deliberately kept in
 # separate files rather than overwriting each other, because --publish hands out both.
-build_apk() {   # $1 = release|debug, $2 = output file
-  local cfg="$1" out="$2" extra=()
+build_apk() {   # $1 = release|debug, $2 = output file, $3 = min api
+  local cfg="$1" out="$2" minapi="$3" extra=()
   [ "$cfg" = "release" ] && extra+=(--release)
-  echo "  -> $cfg: $out"
+  echo "  -> $cfg: $out  (minSdk $minapi)"
   VERSION_CODE="$VERSION_CODE" VERSION_NAME="$VERSION_NAME" \
-    bash toolchain/build.sh app --api "$API" --min-api "$MIN_API" --source "$SOURCE" \
+    bash toolchain/build.sh app --api "$API" --min-api "$minapi" --source "$SOURCE" \
          --out "$out" --verify "${extra[@]+"${extra[@]}"}"
 }
 
@@ -107,10 +124,10 @@ VERIFY=()
 
 bold "4/5 APK"
 case "$MODE" in
-  debug)   build_apk debug   "$DEBUG_APK"; VERIFY=("$DEBUG_APK") ;;
-  release) build_apk release "$APK";       VERIFY=("$APK") ;;
-  both)    build_apk release "$APK"
-           build_apk debug   "$DEBUG_APK"; VERIFY=("$APK" "$DEBUG_APK") ;;
+  debug)   build_apk debug   "$DEBUG_APK" "$DEBUG_MIN_API"; VERIFY=("$DEBUG_APK") ;;
+  release) build_apk release "$APK"       "$MIN_API";       VERIFY=("$APK") ;;
+  both)    build_apk release "$APK"       "$MIN_API"
+           build_apk debug   "$DEBUG_APK" "$DEBUG_MIN_API"; VERIFY=("$APK" "$DEBUG_APK") ;;
 esac
 
 bold "5/5 verify the artifact"
@@ -121,12 +138,27 @@ for f in "${VERIFY[@]}"; do
   fi
 done
 
+# The other half of "does it work": minSdkVersion is a promise that the Java compiler
+# cannot check, because it compiles against API $API. check_api.py reads the compiled
+# classes and asks a real API $MIN_API jar whether every framework call exists there.
+REF_JAR="toolchain/vendor/android-$MIN_API.jar"
+if [ -s "$REF_JAR" ]; then
+  API_ARGS=(--min-api "$MIN_API" --android-jar "$REF_JAR")
+  [ -s "$APK" ] && API_ARGS+=(--apk "$APK")
+  python3 check_api.py app/build/stage/classes "${API_ARGS[@]}"
+else
+  echo "  note: no $REF_JAR - skipping the API level check"
+  echo "        (toolchain/setup.sh fetches it; see check_api.py)"
+fi
+
 bold "done"
 for f in "${VERIFY[@]}"; do
   printf '  %-28s %s\n' "$f" "$(du -h "$f" | cut -f1)"
 done
 echo
 echo "  install:  adb install -r ${VERIFY[0]}"
+echo "  (release: Android 4.4+ / one dex   -   debug: Android 5.0+ / six dex files)"
+echo "  api floor: $MIN_API (release) / $DEBUG_MIN_API (debug) - see check_api.py + api-levels.txt"
 echo "  ship it:  bash publish-apk.sh   (replaces the single artifact on the 'apk' branch)"
 
 if [ "$PUBLISH" = "1" ]; then

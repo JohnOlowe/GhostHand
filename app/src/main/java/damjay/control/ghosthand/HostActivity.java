@@ -15,7 +15,10 @@ import android.provider.Settings;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.ArrayAdapter;
+import android.widget.Toast;
 import android.widget.TextView;
+
+import damjay.control.ghosthand.util.ApiLevels;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
@@ -130,6 +133,20 @@ public class HostActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // Defensive: MainActivity already refuses to start this screen below API 21,
+        // but the activity is exported-ish (it can be launched from a launcher shortcut
+        // or an old task record), and everything below this line assumes MediaProjection
+        // exists. Bail out before inflating anything, which also means no API-21 class
+        // is ever resolved on an older device.
+        if (!ApiLevels.canHost(Build.VERSION.SDK_INT)) {
+            Toast.makeText(this,
+                    getString(R.string.main_host_unavailable, Build.VERSION.RELEASE),
+                    Toast.LENGTH_LONG).show();
+            finish();
+            return;
+        }
+
         setContentView(R.layout.activity_host);
 
         Toolbar toolbar = findViewById(R.id.toolbar);
@@ -470,12 +487,26 @@ public class HostActivity extends AppCompatActivity {
      * asynchronously, and this activity can be on screen before it does.
      */
     private void refreshTouchStatus() {
+        if (!ApiLevels.canInject(Build.VERSION.SDK_INT)) {
+            // Android 5.0-6.x: the host can mirror, but GestureDescription does not
+            // exist yet, so there is nothing to enable and no settings page that would
+            // help. Say so instead of showing a switch that cannot work.
+            dotTouch.setActivated(false);
+            dotTouch.setSelected(false);
+            txtTouchStatus.setText(getString(R.string.host_touch_too_old,
+                    Build.VERSION.RELEASE));
+            btnTouchSettings.setEnabled(false);
+            btnTouchSettings.setAlpha(0.5f);
+            return;
+        }
         boolean enabled = InjectionAccessibilityService.isEnabled(this);
         dotTouch.setActivated(enabled);
         dotTouch.setSelected(false);
         txtTouchStatus.setText(enabled
                 ? R.string.host_touch_enabled
                 : R.string.host_touch_disabled);
+        btnTouchSettings.setEnabled(true);
+        btnTouchSettings.setAlpha(1f);
         btnTouchSettings.setText(enabled
                 ? R.string.host_touch_open_settings
                 : R.string.host_touch_enable);
