@@ -35,7 +35,7 @@ cd "$HERE"
 BRANCH="apk"
 REMOTE="origin"
 APK="app/build/app.apk"
-NAME="GhostHand-debug.apk"
+NAME="GhostHand.apk"
 PUSH=1
 
 while [ $# -gt 0 ]; do
@@ -51,11 +51,10 @@ while [ $# -gt 0 ]; do
 done
 
 [ -s "$APK" ] || { echo "no APK at $APK -- build it first:" >&2
-                   echo "  bash toolchain/build.sh app --api 34 --min-api 26 --source 8" >&2
+                   echo "  bash build.sh" >&2
                    exit 1; }
 
 # ---------------------------------------------------------------- sanity checks
-VERSION="$(printf '%s' "$(basename "$APK")")"
 if [ -x "toolchain/vendor/jre/bin/java" ] && [ -s "toolchain/vendor/apksigner.jar" ]; then
   if ! toolchain/vendor/jre/bin/java -jar toolchain/vendor/apksigner.jar verify "$APK" >/dev/null 2>&1; then
     echo "refusing to publish: $APK is not a validly signed APK" >&2
@@ -99,8 +98,8 @@ would drag along every APK ever built.
 
 \`\`\`bash
 git fetch origin $BRANCH
-git show FETCH_HEAD:$NAME > GhostHand-debug.apk    # one file, one fetch
-adb install -r GhostHand-debug.apk
+git show FETCH_HEAD:$NAME > GhostHand.apk      # one file, one fetch
+adb install -r GhostHand.apk
 \`\`\`
 
 Every build is signed with the same key (\`keystore/damjay_debug.keystore\`), so a new
@@ -109,9 +108,7 @@ APK installs straight over the previous one - no uninstalling.
 ## Build it yourself
 
 \`\`\`bash
-bash toolchain/setup.sh                       # once, ~15 s: JRE + ECJ + aapt2 + D8 + apksigner
-bash toolchain/test.sh  app                   # JUnit unit tests
-bash toolchain/build.sh app --verify          # signed, aligned APK
+bash build.sh                                 # setup + AndroidX + 40 unit tests + signed APK
 \`\`\`
 EOF
 README_BLOB="$(git hash-object -w "$README_FILE")"

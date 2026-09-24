@@ -58,6 +58,11 @@
     <string name="guest_disconnect">Disconnect</string>
     <string name="guest_discovered_none">No hosts found yet. Make sure the host is mirroring and both phones are on the same WiFi, or type the IP shown on the host.</string>
     <string name="guest_log_title">Log</string>
+    <string name="guest_host_label">Host address</string>
+    <string name="guest_hosts_label">Found on this network</string>
+    <string name="guest_stat_fps">decode</string>
+    <string name="guest_stat_size">stream</string>
+    <string name="guest_stat_ping">latency</string>
     <string name="guest_waiting_video">Waiting for the video stream…</string>
     <string name="guest_bad_ip">That does not look like an IP address</string>
 

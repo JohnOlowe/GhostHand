@@ -11,8 +11,8 @@ MANIFEST=""
 JAVA_SRC_LEVEL=8
 MIN_API=""
 
-# Signing defaults. Every one of these is overridable from the environment, and
-# resolve_signing() below prefers a keystore committed in the project.
+# Signing. Defaults are the vendor debug key; resolve_signing() below prefers a
+# keystore committed in the project, and every SIGN_* value is overridable.
 SIGN_KEYSTORE="${SIGN_KEYSTORE:-}"
 SIGN_ALIAS="${SIGN_ALIAS:-androiddebugkey}"
 SIGN_STORE_PASS="${SIGN_STORE_PASS:-android}"
@@ -38,35 +38,37 @@ load_env() {
     export ANDROID_CLASSPATH_JAR="$GH_TOOLCHAIN/android-classpath.jar"
     export AAPT2="$GH_TOOLCHAIN/aapt2"
     export DEBUG_KEYSTORE="$GH_TOOLCHAIN/debug.keystore"
+    export JUNIT_JAR="$GH_TOOLCHAIN/junit.jar"
+    export HAMCREST_JAR="$GH_TOOLCHAIN/hamcrest.jar"
+    export LAMBDA_STUBS_JAR="$GH_TOOLCHAIN/core-lambda-stubs.jar"
   fi
   [ -x "$JAVA_HOME/bin/java" ] || die "no JRE at $JAVA_HOME -- run: bash toolchain/setup.sh"
   [ -s "$ECJ_JAR" ]           || die "no ECJ at $ECJ_JAR -- run: bash toolchain/setup.sh"
   [ -x "$AAPT2" ]             || die "no aapt2 at $AAPT2 -- run: bash toolchain/setup.sh"
   JAVA=("$JAVA_HOME/bin/java")
+  androidx_setup
 }
 
 # resolve_signing PROJECT_ROOT -- prefer the repo's own keystore over the vendor
 # debug key, so every build of this project carries one stable signature and a new
 # APK installs cleanly over the previous one. Explicit SIGN_* env vars still win.
 #
-# Credentials are read from the project's gradle.properties when present (the work
+# Credentials are read from the project's gradle.properties when present: the app
 # was originally set up for Gradle, and keeping one source of truth for the key
-# means the two build systems can never disagree).
+# means the two build systems can never disagree about which key signed what.
 resolve_signing() {
   local proj="$1" root props ks
   root="$(dirname "$proj")"
   for props in "$proj/gradle.properties" "$root/gradle.properties"; do
     [ -s "$props" ] || continue
     local file alias_ store key
-    file=$(sed -n 's/^GHOSTHAND_STORE_FILE=//p'     "$props" | head -1)
-    store=$(sed -n 's/^GHOSTHAND_STORE_PASSWORD=//p' "$props" | head -1)
-    alias_=$(sed -n 's/^GHOSTHAND_KEY_ALIAS=//p'    "$props" | head -1)
-    key=$(sed -n 's/^GHOSTHAND_KEY_PASSWORD=//p'    "$props" | head -1)
+    file=$(sed -n 's/^GHOSTHAND_STORE_FILE=//p'      "$props" | sed -n '1p')
+    store=$(sed -n 's/^GHOSTHAND_STORE_PASSWORD=//p' "$props" | sed -n '1p')
+    alias_=$(sed -n 's/^GHOSTHAND_KEY_ALIAS=//p'     "$props" | sed -n '1p')
+    key=$(sed -n 's/^GHOSTHAND_KEY_PASSWORD=//p'     "$props" | sed -n '1p')
     [ -n "$store" ] && SIGN_STORE_PASS="$store"
     [ -n "$alias_" ] && SIGN_ALIAS="$alias_"
-    # PKCS12 has no separate key password (keytool prints a warning and ignores the
-    # distinction), so a missing/truncated key password falls back to the store one.
-    [ -n "$key" ] && SIGN_KEY_PASS="$key" || SIGN_KEY_PASS="$SIGN_STORE_PASS"
+    [ -n "$key" ] && SIGN_KEY_PASS="$key"
     [ -n "$file" ] && [ -s "$root/$file" ] && SIGN_KEYSTORE="$root/$file"
     break
   done
@@ -77,9 +79,10 @@ resolve_signing() {
   done
   [ -n "$SIGN_KEYSTORE" ] || SIGN_KEYSTORE="$DEBUG_KEYSTORE"
 
-  # A truncated key password is a real trap from the original Gradle config: PKCS12
-  # keys open with the *store* password, so if the store password is 32 chars and
-  # only a 31-char one is available, prefer the store password.
+  # PKCS12 stores have no separate key password (keytool prints "Different store and
+  # key passwords not supported for PKCS12" and ignores the difference), so a shorter
+  # key password than the store password is a typo, not a second credential.
+  [ -n "${SIGN_KEY_PASS:-}" ] || SIGN_KEY_PASS="$SIGN_STORE_PASS"
   if [ "${#SIGN_KEY_PASS}" -lt "${#SIGN_STORE_PASS}" ]; then
     SIGN_KEY_PASS="$SIGN_STORE_PASS"
   fi
@@ -88,8 +91,8 @@ resolve_signing() {
 # sign_apk ALIGNED_APK OUT_APK -- apksigner with whichever key resolve_signing picked.
 sign_apk() {
   local aligned="$1" out="$2" v1=false
-  # v1 (JAR) signatures are only needed below API 24, and apksigner writes
-  # META-INF/* after alignment, so enabling them late would break zipalign.
+  # v1 (JAR) signatures only matter below API 24, and apksigner writes META-INF/*
+  # after alignment, so enabling them would undo zipalign.
   [ "${MIN_API:-24}" -lt 24 ] && v1=true
   "$JAVA" -jar "$APKSIGNER_JAR" sign \
     --ks "$SIGN_KEYSTORE" --ks-key-alias "$SIGN_ALIAS" \
@@ -97,6 +100,40 @@ sign_apk() {
     --v1-signing-enabled "$v1" --v2-signing-enabled true \
     --out "$out" "$aligned" 2>/dev/null \
     || die "apksigner failed (keystore $SIGN_KEYSTORE, alias $SIGN_ALIAS)"
+}
+
+# --- AndroidX (optional) ----------------------------------------------------
+# toolchain/androidx.sh installs vendor/androidx/{androidx.jar,res/*.zip,
+# packages.txt}. When present, every AndroidX reference resolves without any
+# flag: the jar goes on ECJ's classpath and into the dexer, the compiled
+# resources go to aapt2 link with -R, and --extra-packages makes aapt2 emit
+# each library's R class (the same trick AGP uses). ANDROIDX_OFF=1 skips all of
+# it, which is what --no-androidx sets.
+androidx_setup() {
+  ANDROIDX_DIR="${ANDROIDX_DIR:-$GH_TOOLCHAIN/androidx}"
+  ANDROIDX_CLASSES=""
+  ANDROIDX_ARGS=()
+  ANDROIDX_STATE="off (--no-androidx)"
+  [ "${ANDROIDX_OFF:-0}" = "1" ] && return 0
+  [ -s "$ANDROIDX_DIR/androidx.jar" ] && ANDROIDX_CLASSES="$ANDROIDX_DIR/androidx.jar"
+  if [ -d "$ANDROIDX_DIR/res" ]; then
+    for z in "$ANDROIDX_DIR"/res/*.zip; do
+      [ -s "$z" ] && ANDROIDX_ARGS+=(-R "$z")
+    done
+  fi
+  if [ -f "$ANDROIDX_DIR/packages.txt" ]; then
+    while IFS= read -r pkg; do
+      [ -n "$pkg" ] && ANDROIDX_ARGS+=(--extra-packages "$pkg")
+    done < "$ANDROIDX_DIR/packages.txt"
+  fi
+  # Library res/ dirs, so xmlcheck can resolve @style/Theme.Material3... and
+  # friends before aapt2 is asked to.
+  ANDROIDX_XML_ARGS=()
+  if [ -n "$ANDROIDX_CLASSES" ] && [ -d "$ANDROIDX_DIR/aar" ]; then
+    for d in "$ANDROIDX_DIR"/aar/*/res; do
+      [ -d "$d" ] && ANDROIDX_XML_ARGS+=(--extra-res "$d")
+    done
+  fi
 }
 
 # Accept both the flat layout (res/, src/, AndroidManifest.xml) and the Gradle
@@ -116,6 +153,34 @@ detect_layout() {
   fi
   ASSETS_DIR="$(dirname "$MANIFEST")/assets"
   [ -f "$MANIFEST" ] || die "no AndroidManifest.xml under $dir"
+  androidx_apply
+}
+
+# AndroidX is linked in only when the project mentions it somewhere (source,
+# resources or manifest): an `androidx.` symbol, a Material Components theme,
+# AppCompat, `com.google.android.material`. Framework themes such as
+# `@android:style/Theme.Material.Light` do not count. GH_ANDROIDX=on forces it
+# in, GH_ANDROIDX=off forces it out.
+androidx_apply() {
+  local mode="${GH_ANDROIDX:-auto}"
+  case "$mode" in
+    off) ANDROIDX_CLASSES=""; ANDROIDX_ARGS=(); ANDROIDX_XML_ARGS=(); return 0 ;;
+    on)  return 0 ;;
+  esac
+  [ -n "$ANDROIDX_CLASSES" ] || return 0
+  local paths=("$SRC_DIR" "$MANIFEST")
+  [ -d "$RES_DIR" ] && paths+=("$RES_DIR")
+  [ -d "${TEST_DIR:-}" ] && paths+=("$TEST_DIR")
+  # Deliberately narrow: `@android:style/Theme.Material.Light` is the *framework*
+  # theme and must not drag AndroidX in, while any TextAppearance.Material3 or
+  # Theme.AppCompat reference must.
+  if ! grep -rqEl 'androidx\.[a-z]|com\.google\.android\.material|Theme\.AppCompat|Theme\.Material3|MaterialComponents' "${paths[@]}" 2>/dev/null; then
+    ANDROIDX_CLASSES=""; ANDROIDX_ARGS=(); ANDROIDX_XML_ARGS=()
+    ANDROIDX_STATE="skipped (project does not mention AndroidX; GH_ANDROIDX=on forces it)"
+  else
+    ANDROIDX_STATE="$ANDROIDX_DIR"
+  fi
+  return 0
 }
 
 # count_java -> number of .java files in the project sources
@@ -142,6 +207,7 @@ aapt2_link() {
   local args=(-o "$out" -I "$ANDROID_JAR" --manifest "$MANIFEST"
               --auto-add-overlay --java "$gen")
   [ -n "${RES_ZIP:-}" ] && [ -s "$RES_ZIP" ] && args+=(-R "$RES_ZIP")
+  [ "${#ANDROIDX_ARGS[@]}" -gt 0 ] && args+=("${ANDROIDX_ARGS[@]}")
   [ -d "$ASSETS_DIR" ] && args+=(-A "$ASSETS_DIR")
   [ -n "${MIN_API:-}" ] && args+=(--min-sdk-version "$MIN_API")
   [ -n "${TARGET_API:-}" ] && args+=(--target-sdk-version "$TARGET_API")
@@ -159,8 +225,13 @@ ecj_compile() {
   if [ "$JAVA_SRC_LEVEL" -le 8 ]; then
     # <=8: -bootclasspath makes java.* resolve against android.jar, exactly like
     # javac with a real Android SDK. Above 8 ECJ refuses -bootclasspath.
+    local boot="$ANDROID_JAR"
+    # android.jar has no LambdaMetafactory, so -source 8 + any lambda needs the
+    # stub jar setup.sh builds (AGP: core-lambda-stubs.jar from build-tools).
+    [ -s "${LAMBDA_STUBS_JAR:-}" ] && boot="$boot:$LAMBDA_STUBS_JAR"
     "$JAVA" -jar "$ECJ_JAR" -source "$JAVA_SRC_LEVEL" -target "$JAVA_SRC_LEVEL" \
-      -bootclasspath "$ANDROID_JAR" -classpath "$ANDROID_JAR" \
+      -bootclasspath "$boot" \
+      -classpath "$ANDROID_JAR${ANDROIDX_CLASSES:+:$ANDROIDX_CLASSES}" \
       "${common[@]}" "$@" $files
   else
     # Above source level 8 the module system makes -bootclasspath illegal, so
@@ -169,6 +240,7 @@ ecj_compile() {
     # restricted to Android's (see toolchain/README.md).
     local cp="$ANDROID_CLASSPATH_JAR"
     [ -s "$cp" ] || cp="$ANDROID_JAR"
+    [ -n "$ANDROIDX_CLASSES" ] && cp="$cp:$ANDROIDX_CLASSES"
     "$JAVA" -jar "$ECJ_JAR" -source "$JAVA_SRC_LEVEL" -target "$JAVA_SRC_LEVEL" \
       -classpath "$cp" "${common[@]}" "$@" $files
   fi
@@ -181,16 +253,19 @@ dex() {
   local min_api="${MIN_API:-24}"
   local classes; classes=$(find "$CLASSES_DIR" -name '*.class')
   [ -n "$classes" ] || die "nothing to dex: $CLASSES_DIR is empty"
+  # AndroidX classes are program input, not a library: they must land in the dex.
+  local ax=()
+  [ -n "$ANDROIDX_CLASSES" ] && [ "${DEX_SKIP_ANDROIDX:-0}" != "1" ] && ax=("$ANDROIDX_CLASSES")
   if [ "${RELEASE:-0}" = "1" ]; then
     local pgconf="$PROJ/proguard.pro"
     local extra=()
     [ -f "$pgconf" ] && extra=(--pg-conf "$pgconf")
     "$JAVA" -cp "$D8_JAR" com.android.tools.r8.R8 --release --dex \
       --min-api "$min_api" --lib "$ANDROID_JAR" "${extra[@]}" "$@" \
-      --output "$out" $classes || die "R8 failed"
+      --output "$out" $classes "${ax[@]}" || die "R8 failed"
   else
     "$JAVA" -cp "$D8_JAR" com.android.tools.r8.D8 \
       --min-api "$min_api" --lib "$ANDROID_JAR" "$@" \
-      --output "$out" $classes || die "D8 failed (Java bytecode the dexer rejects?)"
+      --output "$out" $classes "${ax[@]}" || die "D8 failed (Java bytecode the dexer rejects?)"
   fi
 }

@@ -3,6 +3,7 @@
 #
 #   bash toolchain/build.sh PROJECT_DIR [--api 34] [--min-api 24] [--release]
 #                                      [--source 8] [--out FILE] [--verify]
+#                                      [--no-androidx]
 #
 # Pipeline: xmllint -> aapt2 compile -> aapt2 link (+R.java) -> ECJ -> D8/R8
 #           -> classes.dex into the APK -> zipalign.py -> apksigner -> verify
@@ -24,6 +25,7 @@ while [ $# -gt 0 ]; do
     --release) RELEASE=1; shift ;;
     --out) OUT="$2"; shift 2 ;;
     --verify) VERIFY=1; shift ;;
+    --no-androidx) ANDROIDX_OFF=1; shift ;;
     -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
     -*) die "unknown option $1" ;;
     *) PROJ_ARG="$1"; shift ;;
@@ -32,6 +34,7 @@ done
 [ -n "$PROJ_ARG" ] || die "usage: build.sh PROJECT_DIR [options]"
 [ -n "$MIN_API" ] || MIN_API=24
 RELEASE="${RELEASE:-0}"
+androidx_setup
 
 detect_layout "$PROJ_ARG"
 resolve_signing "$PROJ"
@@ -46,11 +49,13 @@ START=$(date +%s)
 
 msg "building $PROJ"
 info "java $JAVA_SRC_LEVEL, min API $MIN_API, target API $TARGET_API, $( [ "$RELEASE" = 1 ] && echo 'R8 release' || echo 'D8 debug' )"
-info "signing with $SIGN_KEYSTORE (alias $SIGN_ALIAS)"
+info "androidx: ${ANDROIDX_STATE:-none}"
+info "signing:  $SIGN_KEYSTORE (alias $SIGN_ALIAS)"
 
 # 1. XML pre-flight ---------------------------------------------------------
 msg "1/7 XML lint"
-python3 "$HERE/xmlcheck.py" "$PROJ" || die "XML problems above (aapt2 would fail on most of them too)"
+python3 "$HERE/xmlcheck.py" "$PROJ" "${ANDROIDX_XML_ARGS[@]+"${ANDROIDX_XML_ARGS[@]}"}" \
+  || die "XML problems above (aapt2 would fail on most of them too)"
 
 # 2. resources --------------------------------------------------------------
 msg "2/7 aapt2 compile (res/**, *.xml -> flat resource table)"
@@ -100,7 +105,7 @@ sign_apk "$ALIGNED" "$FINAL"
 python3 "$HERE/zipalign.py" -c -p 4 --ignore-regex '^META-INF/' "$FINAL" | sed 's/^/    /'
 
 msg "result"
-"$AAPT2" dump badging "$FINAL" | head -6 | sed 's/^/    /'
+"$AAPT2" dump badging "$FINAL" 2>/dev/null | sed -n '1,6p' | sed 's/^/    /'
 info "APK: $FINAL ($(du -h "$FINAL" | cut -f1))"
 
 if [ "$VERIFY" = "1" ]; then

@@ -1,36 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Guest screen: video first, controls second.
+  Guest screen.
 
-  Layout logic:
-  * The root is a FrameLayout so the status pill can float on top of the video.
-  * videoContainer is centred and its size is set from Java to match the stream's
-    aspect ratio (letterboxing). The SurfaceView inside it is match_parent, so the
-    decoder always renders into exactly the right rectangle.
-  * panelConnect holds everything you need *before* a stream exists; it is hidden
-    once video starts so the picture can use the whole screen.
+  A FrameLayout because the video has to be able to fill the whole window while the
+  status pill and the connect panel float on top of it. The panel is a
+  MaterialCardView holding a TextInputLayout for the host IP, a RecyclerView for
+  discovered hosts and MaterialButtons; it is hidden once the stream is up, which is
+  what turns this into a full-screen viewer.
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/video_background"
-    android:keepScreenOn="true">
+    android:fitsSystemWindows="true">
 
-    <!-- ============================== video =============================== -->
+    <!-- The video. Letterboxed at runtime by resizing this container to the
+         stream's aspect ratio, so MediaCodec always renders into a correctly
+         shaped Surface instead of stretching. -->
     <FrameLayout
         android:id="@+id/videoContainer"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_gravity="center"
-        android:background="@color/video_background">
+        android:layout_gravity="center">
 
         <SurfaceView
             android:id="@+id/surfaceVideo"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:layout_gravity="center" />
+            android:layout_height="match_parent" />
 
         <TextView
             android:id="@+id/txtOverlay"
@@ -39,14 +38,13 @@
             android:layout_height="wrap_content"
             android:layout_gravity="center"
             android:background="@drawable/bg_pill"
-            android:paddingStart="18dp"
-            android:paddingTop="10dp"
-            android:paddingEnd="18dp"
-            android:paddingBottom="10dp"
-            android:text="@string/guest_status_idle" />
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="8dp"
+            android:text="@string/guest_status_idle"
+            android:textColor="@color/text_primary" />
     </FrameLayout>
 
-    <!-- ========================= floating status ========================== -->
+    <!-- Status pill, top-left. -->
     <LinearLayout
         android:id="@+id/statusPill"
         android:layout_width="wrap_content"
@@ -56,10 +54,8 @@
         android:background="@drawable/bg_pill"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingStart="12dp"
-        android:paddingTop="8dp"
-        android:paddingEnd="14dp"
-        android:paddingBottom="8dp">
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="7dp">
 
         <View
             android:id="@+id/dotStatus"
@@ -74,161 +70,181 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
             android:text="@string/guest_status_idle"
+            android:textColor="@color/text_primary"
             android:textSize="12sp" />
     </LinearLayout>
 
-    <!-- ===================== connect / discovery panel ==================== -->
-    <ScrollView
+    <!-- ===================== connect / detail panel ===================== -->
+    <com.google.android.material.card.MaterialCardView
         android:id="@+id/panelConnect"
+        style="@style/Card"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom"
-        android:background="@color/bg"
-        android:fillViewport="false"
-        android:maxHeight="420dp">
+        android:layout_margin="12dp">
 
-        <LinearLayout
+        <ScrollView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="18dp">
+            android:maxHeight="420dp">
 
-            <TextView
-                style="@style/Text.Title"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/title_guest"
-                android:textSize="22sp" />
-
-            <TextView
-                android:id="@+id/txtGuestHint"
-                style="@style/Text.Subtitle"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="@string/guest_status_idle"
-                android:textSize="12sp" />
-
-            <!-- manual entry -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
-                android:orientation="horizontal">
+                android:orientation="vertical"
+                android:padding="18dp">
 
-                <EditText
-                    android:id="@+id/edtHost"
-                    android:layout_width="0dp"
-                    android:layout_height="52dp"
-                    android:layout_weight="1"
-                    android:autofillHints=""
-                    android:background="@drawable/bg_input"
-                    android:digits="0123456789.:"
-                    android:hint="@string/guest_hint_ip"
-                    android:imeOptions="actionDone"
-                    android:inputType="numberDecimal"
-                    android:paddingStart="14dp"
-                    android:paddingEnd="14dp"
-                    android:textColor="@color/text_primary"
-                    android:textColorHint="@color/text_secondary"
-                    android:textSize="15sp" />
+                <TextView
+                    style="@style/Text.Label"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="6dp"
+                    android:text="@string/guest_host_label" />
 
-                <Button
+                <com.google.android.material.textfield.TextInputLayout
+                    android:id="@+id/boxHost"
+                    style="@style/Input.Host"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="@string/guest_hint_ip">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/edtHost"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:imeOptions="actionGo"
+                        android:inputType="textUri"
+                        android:maxLines="1"
+                        android:fontFamily="monospace" />
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnConnect"
-                    style="@style/Button.Primary"
-                    android:layout_width="wrap_content"
-                    android:layout_height="52dp"
-                    android:layout_marginStart="10dp"
-                    android:minWidth="120dp"
-                    android:text="@string/guest_connect" />
-            </LinearLayout>
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:minHeight="52dp"
+                    android:text="@string/guest_connect"
+                    app:cornerRadius="14dp" />
 
-            <!-- discovered hosts -->
-            <TextView
-                style="@style/Text.Label"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="18dp"
-                android:text="@string/guest_status_discovering" />
+                <TextView
+                    style="@style/Text.Label"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:text="@string/guest_hosts_label" />
 
-            <LinearLayout
-                android:id="@+id/listHosts"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:orientation="vertical">
+                <!-- Discovered hosts. A RecyclerView instead of inflating rows into a
+                     LinearLayout: view recycling matters as soon as a network has
+                     more than a couple of devices announcing themselves. -->
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/listHosts"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:nestedScrollingEnabled="false"
+                    tools:itemCount="2"
+                    tools:listitem="@layout/item_host" />
 
                 <TextView
                     android:id="@+id/txtNoHosts"
                     style="@style/Text.Subtitle"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
                     android:text="@string/guest_discovered_none"
                     android:textSize="12sp" />
+
+                <!-- ===================== live stats ===================== -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:orientation="horizontal">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            style="@style/Text.Label"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/guest_stat_fps" />
+
+                        <TextView
+                            android:id="@+id/txtStatFps"
+                            style="@style/Stat.Value"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textSize="15sp" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1.2"
+                        android:orientation="vertical">
+
+                        <TextView
+                            style="@style/Text.Label"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/guest_stat_size" />
+
+                        <TextView
+                            android:id="@+id/txtStatSize"
+                            style="@style/Stat.Value"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textSize="15sp" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            style="@style/Text.Label"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/guest_stat_ping" />
+
+                        <TextView
+                            android:id="@+id/txtStatPing"
+                            style="@style/Stat.Value"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textSize="15sp" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <ScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="110dp"
+                    android:layout_marginTop="12dp">
+
+                    <TextView
+                        android:id="@+id/txtLog"
+                        style="@style/Text.Mono"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textSize="11sp" />
+                </ScrollView>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnDisconnect"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:enabled="false"
+                    android:text="@string/guest_disconnect" />
             </LinearLayout>
-
-            <!-- live stats + log -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:baselineAligned="false"
-                android:orientation="horizontal">
-
-                <TextView
-                    android:id="@+id/txtStatFps"
-                    style="@style/Text.Mono"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:textSize="12sp"
-                    tools:text="30 fps" />
-
-                <TextView
-                    android:id="@+id/txtStatSize"
-                    style="@style/Text.Mono"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:textSize="12sp"
-                    tools:text="1088x2336" />
-
-                <TextView
-                    android:id="@+id/txtStatPing"
-                    style="@style/Text.Mono"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="end"
-                    android:textSize="12sp"
-                    tools:text="rtt 12 ms" />
-            </LinearLayout>
-
-            <TextView
-                android:id="@+id/txtLog"
-                style="@style/Text.Mono"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:background="@drawable/bg_card_alt"
-                android:minHeight="96dp"
-                android:padding="12dp"
-                android:textSize="11sp"
-                tools:text="discovery started" />
-
-            <Button
-                android:id="@+id/btnDisconnect"
-                style="@style/Button.Quiet"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:enabled="false"
-                android:text="@string/guest_disconnect" />
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="12dp" />
-        </LinearLayout>
-    </ScrollView>
+        </ScrollView>
+    </com.google.android.material.card.MaterialCardView>
 </FrameLayout>

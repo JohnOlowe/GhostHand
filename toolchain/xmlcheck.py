@@ -11,9 +11,10 @@ pre-flight pass, using nothing but the standard library:
     android:exported present where API 31+ demands it, duplicate activity names
   * resource files: duplicate <string>/<color>/... names, empty values
   * `@type/name` and `@+id/name` references resolve to something that exists
+    (add --extra-res DIR for library resources, e.g. AndroidX AAR res/ dirs)
 
 Usage:
-    python3 xmlcheck.py PROJECT_DIR [PROJECT_DIR ...]
+    python3 xmlcheck.py PROJECT_DIR [PROJECT_DIR ...] [--extra-res DIR ...]
     python3 xmlcheck.py --json PROJECT_DIR
 Exit code: 0 clean, 1 problems found, 2 bad usage.
 """
@@ -35,10 +36,10 @@ COMPONENT_TAGS = ("activity", "activity-alias", "service", "receiver", "provider
 # values-night, layout-land-sw600dp, drawable-en-xhdpi. Only the first segment is
 # the resource type; the rest are configuration qualifiers.
 RES_DIR_RE = re.compile(r"^([a-z]+)(?:-.+)?$")
-# Non-XML files still define resources: ic_launcher.webp in mipmap-hdpi is exactly
-# as real as a drawable XML, so it must satisfy @mipmap/ic_launcher references.
-BINARY_RES_EXTS = (".png", ".webp", ".jpg", ".jpeg", ".gif", ".9.png", ".ttf",
-                   ".otf", ".mp3", ".wav", ".ogg", ".mp4", ".webm")
+# Non-XML files define resources too: ic_launcher.webp in mipmap-hdpi is exactly as
+# real as a drawable XML, so it has to satisfy @mipmap/ic_launcher references.
+BINARY_RES_EXTS = (".9.png", ".png", ".webp", ".jpg", ".jpeg", ".gif",
+                   ".ttf", ".otf", ".mp3", ".wav", ".ogg", ".mp4", ".webm")
 # values tags whose resource type is not the tag name.
 VALUE_TAG_ALIASES = {"string-array": "array", "integer-array": "array",
                      "array": "array", "declare-styleable": "styleable"}
@@ -77,22 +78,30 @@ def find_res_dirs(root_dir):
     return [d for d in candidates if os.path.isdir(d)]
 
 
-def collect_resources(root_dir):
-    """{resource_type: {name: (file, line)}} for every resource in the project."""
+def collect_resources(root_dir, extra_res_dirs=()):
+    """{resource_type: {name: (file, line)}} for every resource in the project.
+
+    extra_res_dirs are *library* resource directories (AndroidX AARs). They are
+    indexed so that `@style/Theme.Material3...` resolves, but the project's own
+    definitions win and library files are never reported as duplicates.
+    """
     found = {}
     for res_dir in find_res_dirs(root_dir):
         found = _scan_res_dir(res_dir, found)
+    for res_dir in extra_res_dirs:
+        if os.path.isdir(res_dir):
+            found = _scan_res_dir(res_dir, found, override=False)
     return found
 
 
-def _scan_res_dir(res_dir, found):
+def _scan_res_dir(res_dir, found, override=True):
     for dirpath, _dirs, files in os.walk(res_dir):
         rel = os.path.relpath(dirpath, res_dir)
         leaf = rel.split(os.sep)[0]
         if leaf == ".":
             continue
 
-        # Split "drawable-v24" into type "drawable" + qualifier "v24".
+        # Split "drawable-v24" into type "drawable" + qualifiers.
         m = RES_DIR_RE.match(leaf)
         if not m:
             continue
@@ -120,27 +129,38 @@ def _scan_res_dir(res_dir, found):
                         rtype = VALUE_TAG_ALIASES.get(child.tag, child.tag)
                     if rtype and rtype not in ("public", "overlayable", "macro",
                                                "staging-public-group", "resources"):
-                        found.setdefault(rtype, {})[resname] = (path, 0)
+                        _add(found, rtype, resname, path, override)
                 continue
 
-            # File-based resources: the file name (minus extension) is the resource
-            # name, and the directory's first segment is the type.
+            # File-based resources: the file name (minus its extension) is the
+            # resource name and the directory's first segment is the type.
             typ = m.group(1)
             if typ not in FILE_RES_TYPES:
                 continue
             if name.endswith(".xml"):
                 base = name[:-4]
-            elif name.lower().endswith(BINARY_RES_EXTS):
-                base = name
-                for ext in (".9.png", ".png", ".webp", ".jpg", ".jpeg", ".gif",
-                            ".ttf", ".otf", ".mp3", ".wav", ".ogg", ".mp4", ".webm"):
-                    if base.lower().endswith(ext):
-                        base = base[: -len(ext)]
-                        break
             else:
-                continue
-            found.setdefault(typ, {}).setdefault(base, (path, 0))
+                base = _strip_binary_ext(name)
+                if base is None:
+                    continue
+            _add(found, typ, base, path, override)
     return found
+
+
+def _add(found, rtype, name, path, override):
+    """Register one resource; library passes may not clobber project entries."""
+    bucket = found.setdefault(rtype, {})
+    if override or name not in bucket:
+        bucket[name] = (path, 0)
+
+
+def _strip_binary_ext(name):
+    """ic_launcher.webp -> ic_launcher; None if this is not a resource file."""
+    lowered = name.lower()
+    for ext in BINARY_RES_EXTS:
+        if lowered.endswith(ext):
+            return name[: -len(ext)]
+    return None
 
 
 def _wellformed(path):
@@ -343,7 +363,7 @@ def _check_values_dir(res_dir, problems):
                                             "<string name=%r> contains an unescaped apostrophe" % rname))
 
 
-def run(root_dirs, as_json=False):
+def run(root_dirs, as_json=False, extra_res_dirs=()):
     all_problems = []
     for root_dir in root_dirs:
         if not os.path.isdir(root_dir):
@@ -351,7 +371,7 @@ def run(root_dirs, as_json=False):
             continue
         problems = []
         n_xml = check_xml_files(root_dir, problems)
-        res_index = collect_resources(root_dir)
+        res_index = collect_resources(root_dir, extra_res_dirs)
         check_values(root_dir, problems)
         check_manifest(root_dir, problems, res_index)
         check_refs(root_dir, problems, res_index)
@@ -380,9 +400,12 @@ def run(root_dirs, as_json=False):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Android XML/manifest linter")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--extra-res", action="append", default=[], metavar="DIR",
+                    help="library res/ directory to index for reference checks "
+                         "(repeatable; used for AndroidX AARs)")
     ap.add_argument("dirs", nargs="+")
     a = ap.parse_args(argv)
-    return run(a.dirs, a.json)
+    return run(a.dirs, a.json, a.extra_res)
 
 
 if __name__ == "__main__":

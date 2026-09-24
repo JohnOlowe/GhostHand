@@ -1,123 +1,149 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Role picker. Two big cards; each one just starts another activity.
-  ScrollView so it survives a small landscape phone.
+  Role picker. Two MaterialCardViews, each one a role.
+
+  MaterialCardView (not a background drawable) gives the shape, the elevation and
+  the ripple for free, and reads its colour from ?attr/colorSurface, so the card
+  follows the theme into dark mode without any extra work.
 -->
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg"
-    android:fillViewport="true">
+    android:background="?android:attr/colorBackground"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical">
 
-    <LinearLayout
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbar"
+        style="@style/Toolbar.App"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="20dp">
+        android:layout_height="?attr/actionBarSize"
+        app:title="@string/app_name" />
 
-        <TextView
-            android:id="@+id/txtTitle"
-            style="@style/Text.Title"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:text="@string/main_title"
-            android:textSize="34sp" />
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:padding="16dp">
 
-        <TextView
-            android:id="@+id/txtSubtitle"
-            style="@style/Text.Subtitle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:layout_marginBottom="24dp"
-            android:text="@string/main_subtitle" />
-
-        <!-- ============================== HOST ============================== -->
         <LinearLayout
-            android:id="@+id/cardHost"
-            style="@style/Card.Clickable"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical">
 
-            <LinearLayout
+            <TextView
+                android:id="@+id/txtTitle"
+                style="@style/Text.Title"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <ImageView
-                    android:layout_width="34dp"
-                    android:layout_height="34dp"
-                    android:contentDescription="@null"
-                    android:src="@drawable/ic_host" />
-
-                <TextView
-                    style="@style/Text.Title"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="12dp"
-                    android:text="@string/main_host_title"
-                    android:textSize="19sp" />
-            </LinearLayout>
+                android:text="@string/main_title"
+                android:textSize="28sp" />
 
             <TextView
+                android:id="@+id/txtSubtitle"
                 style="@style/Text.Subtitle"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:text="@string/main_host_body" />
-        </LinearLayout>
+                android:layout_marginTop="6dp"
+                android:layout_marginBottom="20dp"
+                android:text="@string/main_subtitle" />
 
-        <!-- ============================== GUEST ============================= -->
-        <LinearLayout
-            android:id="@+id/cardGuest"
-            style="@style/Card.Clickable"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
-            android:orientation="vertical">
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/cardHost"
+                style="@style/Card.Clickable"
+                android:layout_marginBottom="12dp"
+                app:cardBackgroundColor="?attr/colorPrimaryContainer">
 
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <ImageView
-                    android:layout_width="34dp"
-                    android:layout_height="34dp"
-                    android:contentDescription="@null"
-                    android:src="@drawable/ic_guest" />
-
-                <TextView
-                    style="@style/Text.Title"
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="12dp"
-                    android:text="@string/main_guest_title"
-                    android:textSize="19sp" />
-            </LinearLayout>
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:padding="18dp">
+
+                    <ImageView
+                        android:layout_width="34dp"
+                        android:layout_height="34dp"
+                        android:contentDescription="@string/main_host_title"
+                        android:src="@drawable/ic_host" />
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="16dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            style="@style/Text.Title"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/main_host_title"
+                            android:textColor="?attr/colorOnPrimaryContainer"
+                            android:textSize="17sp" />
+
+                        <TextView
+                            style="@style/Text.Subtitle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text="@string/main_host_body"
+                            android:textColor="?attr/colorOnPrimaryContainer" />
+                    </LinearLayout>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/cardGuest"
+                style="@style/Card.Clickable">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:padding="18dp">
+
+                    <ImageView
+                        android:layout_width="34dp"
+                        android:layout_height="34dp"
+                        android:contentDescription="@string/main_guest_title"
+                        android:src="@drawable/ic_guest" />
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="16dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            style="@style/Text.Title"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/main_guest_title"
+                            android:textSize="17sp" />
+
+                        <TextView
+                            style="@style/Text.Subtitle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text="@string/main_guest_body" />
+                    </LinearLayout>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
 
             <TextView
-                style="@style/Text.Subtitle"
+                android:id="@+id/txtFooter"
+                style="@style/Text.Mono"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:text="@string/main_guest_body" />
+                android:layout_marginTop="20dp"
+                android:alpha="0.7"
+                android:textSize="11sp" />
         </LinearLayout>
-
-        <TextView
-            android:id="@+id/txtFooter"
-            style="@style/Text.Subtitle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="22dp"
-            android:fontFamily="monospace"
-            android:textSize="12sp"
-            tools:text="protocol info" />
-
-    </LinearLayout>
-</ScrollView>
+    </ScrollView>
+</LinearLayout>

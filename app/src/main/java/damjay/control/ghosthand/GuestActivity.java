@@ -1,6 +1,5 @@
 package damjay.control.ghosthand;
 
-import android.app.Activity;
 import android.content.pm.ActivityInfo;
 import android.os.Build;
 import android.os.Bundle;
@@ -10,17 +9,30 @@ import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
-import android.widget.EditText;
 import android.widget.FrameLayout;
-import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.TextView;
+
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.Toolbar;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+
+import com.google.android.material.button.MaterialButton;
+import com.google.android.material.card.MaterialCardView;
+import com.google.android.material.snackbar.Snackbar;
+import com.google.android.material.textfield.TextInputEditText;
+import com.google.android.material.textfield.TextInputLayout;
 
 import java.io.IOException;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -42,25 +54,35 @@ import damjay.control.ghosthand.net.Record;
  * </pre>
  *
  * <p><b>Why a SurfaceView and not an ImageView?</b> A SurfaceView owns a separate
- * window that SurfaceFlinger composites under the app's UI, and MediaCodec can
- * render into it without a single pixel passing through Java heap. Bitmaps would
- * mean decode-to-memory then upload-to-GPU every frame. The price is that the
- * surface is created and destroyed asynchronously, so the decoder is started only
- * from {@code surfaceCreated} and stopped in {@code surfaceDestroyed} - drawing into
- * a dead surface throws.
+ * window that SurfaceFlinger composites under the app's UI, and MediaCodec can render
+ * into it without a single pixel passing through the Java heap. The price is that the
+ * surface is created and destroyed asynchronously, so the decoder is started only from
+ * {@code surfaceCreated} and stopped in {@code surfaceDestroyed} - drawing into a dead
+ * surface throws.
  *
- * <p><b>Two things must both be true before decoding can start:</b> the host's
- * SPS/PPS (VIDEO_CONFIG frame) and a live Surface. Either may arrive first, so both
- * paths funnel into {@link #startDecoderIfNeeded()}.
+ * <p><b>Two things must both be true before decoding can start:</b> the host's SPS/PPS
+ * (a VIDEO_CONFIG frame) and a live Surface. Either can arrive first, so both paths
+ * funnel into {@link #startDecoderIfNeeded()}.
+ *
+ * <p><b>What AndroidX changed here.</b> Three things:
+ * <ul>
+ *   <li>the discovered-host list is an {@link RecyclerView} with a real adapter
+ *       instead of inflating item views into a LinearLayout on every update;</li>
+ *   <li>full-screen mode uses {@link WindowInsetsControllerCompat}, the
+ *       {@code setSystemUiVisibility} replacement that also works on API 30+ where the
+ *       old flags are ignored;</li>
+ *   <li>the IP field is a Material {@link TextInputLayout} + {@link TextInputEditText},
+ *       so errors and hints are drawn by the component, not by hand.</li>
+ * </ul>
  */
-public class GuestActivity extends Activity implements GuestController.Listener {
+public class GuestActivity extends AppCompatActivity implements GuestController.Listener {
 
     private static final int DEFAULT_PORT = GhostProtocol.DEFAULT_PORT;
 
     // views (see res/layout/activity_guest.xml)
     private FrameLayout root;
     private FrameLayout videoContainer;
-    private android.view.SurfaceView surfaceVideo;
+    private SurfaceView surfaceVideo;
     private TextView txtOverlay;
     private TextView txtStatus;
     private TextView txtLog;
@@ -69,13 +91,14 @@ public class GuestActivity extends Activity implements GuestController.Listener 
     private TextView txtStatPing;
     private TextView txtNoHosts;
     private View dotStatus;
-    private View statusPill;
-    private ScrollView panelConnect;
-    private LinearLayout listHosts;
-    private EditText edtHost;
-    private Button btnConnect;
-    private Button btnDisconnect;
+    private MaterialCardView panelConnect;
+    private RecyclerView listHosts;
+    private TextInputLayout boxHost;
+    private TextInputEditText edtHost;
+    private MaterialButton btnConnect;
+    private MaterialButton btnDisconnect;
 
+    private HostAdapter hostAdapter;
     private GuestController controller;
     private VideoDecoder decoder;
 
@@ -95,7 +118,7 @@ public class GuestActivity extends Activity implements GuestController.Listener 
     private float lastTouchX = -1f;
     private float lastTouchY = -1f;
 
-    // fps readout: counted here because VideoDecoder.onFrameRendered fires per frame
+    // fps readout, counted here because VideoDecoder.onFrameRendered fires per frame
     private int renderedWindow;
     private long renderedWindowStartMs;
 
@@ -121,13 +144,14 @@ public class GuestActivity extends Activity implements GuestController.Listener 
         txtStatPing = findViewById(R.id.txtStatPing);
         txtNoHosts = findViewById(R.id.txtNoHosts);
         dotStatus = findViewById(R.id.dotStatus);
-        statusPill = findViewById(R.id.statusPill);
         panelConnect = findViewById(R.id.panelConnect);
         listHosts = findViewById(R.id.listHosts);
+        boxHost = findViewById(R.id.boxHost);
         edtHost = findViewById(R.id.edtHost);
         btnConnect = findViewById(R.id.btnConnect);
         btnDisconnect = findViewById(R.id.btnDisconnect);
 
+        setupHostList();
         controller = new GuestController(this);
         decoder = new VideoDecoder(decoderListener);
 
@@ -229,8 +253,7 @@ public class GuestActivity extends Activity implements GuestController.Listener 
                     + (pendingPps == null ? 0 : pendingPps.length) + "B PPS)");
         } catch (IOException e) {
             appendLog("decoder could not start: " + e.getMessage());
-            txtOverlay.setText("No H.264 decoder on this device");
-            txtOverlay.setVisibility(View.VISIBLE);
+            showOverlay("No H.264 decoder on this device");
         }
     }
 
@@ -245,6 +268,13 @@ public class GuestActivity extends Activity implements GuestController.Listener 
     // --------------------------------------------------------------------------
     // Controls
     // --------------------------------------------------------------------------
+
+    /** RecyclerView setup: one adapter instance, reused for every discovery update. */
+    private void setupHostList() {
+        hostAdapter = new HostAdapter();
+        listHosts.setLayoutManager(new LinearLayoutManager(this));
+        listHosts.setAdapter(hostAdapter);
+    }
 
     private void setupControls() {
         btnConnect.setOnClickListener(v -> connectFromInput());
@@ -263,8 +293,9 @@ public class GuestActivity extends Activity implements GuestController.Listener 
     }
 
     private void connectFromInput() {
-        String raw = edtHost.getText().toString().trim();
+        String raw = edtHost.getText() == null ? "" : edtHost.getText().toString().trim();
         if (raw.isEmpty()) {
+            boxHost.setError(getString(R.string.guest_bad_ip));
             appendLog("no address entered - pick a discovered host or type an IP");
             return;
         }
@@ -276,22 +307,24 @@ public class GuestActivity extends Activity implements GuestController.Listener 
             try {
                 port = Integer.parseInt(raw.substring(colon + 1));
             } catch (NumberFormatException e) {
+                boxHost.setError("bad port");
                 appendLog("bad port in '" + raw + "'");
                 return;
             }
         }
         if (host.isEmpty() || host.indexOf('.') < 0) {
+            boxHost.setError(getString(R.string.guest_bad_ip));
             appendLog(getString(R.string.guest_bad_ip) + ": " + raw);
             return;
         }
+        boxHost.setError(null);
         connectTo(host, port, "manual entry");
     }
 
     private void connectTo(String host, int port, String how) {
         appendLog("connecting to " + host + ":" + port + " (" + how + ")");
         txtStatus.setText(R.string.guest_status_connecting);
-        txtOverlay.setText(R.string.guest_status_connecting);
-        txtOverlay.setVisibility(View.VISIBLE);
+        showOverlay(getString(R.string.guest_status_connecting));
         dotStatus.setActivated(false);
         btnConnect.setEnabled(false);
         controller.connect(host, port, Build.MODEL);
@@ -313,10 +346,8 @@ public class GuestActivity extends Activity implements GuestController.Listener 
         btnConnect.setEnabled(true);
         btnDisconnect.setEnabled(false);
         txtStatus.setText(R.string.guest_status_idle);
-        txtOverlay.setText(R.string.guest_status_idle);
-        txtOverlay.setVisibility(View.VISIBLE);
+        showOverlay(getString(R.string.guest_status_idle));
         panelConnect.setVisibility(View.VISIBLE);
-        statusPill.setVisibility(View.VISIBLE);
         dotStatus.setActivated(false);
         dotStatus.setSelected(false);
         txtStatFps.setText("");
@@ -325,23 +356,9 @@ public class GuestActivity extends Activity implements GuestController.Listener 
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
     }
 
-    /** Rebuilds the discovered-host list (rows inflated from item_host.xml). */
-    private void renderHosts(List<GuestController.DiscoveredHost> hosts) {
-        listHosts.removeAllViews();
-        if (hosts.isEmpty()) {
-            listHosts.addView(txtNoHosts);
-            return;
-        }
-        LayoutInflater inflater = LayoutInflater.from(this);
-        for (GuestController.DiscoveredHost host : hosts) {
-            View row = inflater.inflate(R.layout.item_host, listHosts, false);
-            TextView name = row.findViewById(R.id.txtHostName);
-            TextView addr = row.findViewById(R.id.txtHostAddr);
-            name.setText(host.name);
-            addr.setText(host.host + ":" + host.port);
-            row.setOnClickListener(v -> connectTo(host.host, host.port, "mDNS"));
-            listHosts.addView(row);
-        }
+    private void showOverlay(String text) {
+        txtOverlay.setText(text);
+        txtOverlay.setVisibility(View.VISIBLE);
     }
 
     // --------------------------------------------------------------------------
@@ -350,8 +367,8 @@ public class GuestActivity extends Activity implements GuestController.Listener 
 
     /**
      * Sizes {@code videoContainer} so the stream keeps its aspect ratio inside the
-     * window (letterbox / pillarbox). MediaCodec stretches to whatever the Surface
-     * is, so without this a landscape stream would be squashed into a portrait view.
+     * window (letterbox / pillarbox). MediaCodec stretches to whatever the Surface is,
+     * so without this a landscape stream would be squashed into a portrait view.
      */
     private void applyVideoAspect() {
         if (streamWidth <= 0 || streamHeight <= 0) {
@@ -389,8 +406,8 @@ public class GuestActivity extends Activity implements GuestController.Listener 
     }
 
     /**
-     * Matches this device's orientation to the stream's, so mirroring a portrait
-     * phone onto a phone held in portrait needs no letterboxing at all.
+     * Matches this device's orientation to the stream's, so mirroring a portrait phone
+     * onto a phone held in portrait needs no letterboxing at all.
      */
     private void matchOrientationToStream() {
         if (streamWidth <= 0 || streamHeight <= 0) {
@@ -404,7 +421,14 @@ public class GuestActivity extends Activity implements GuestController.Listener 
         }
     }
 
-    @SuppressWarnings("deprecation")
+    /**
+     * Hides the status and navigation bars with {@link WindowInsetsControllerCompat}.
+     *
+     * <p>On API 30+ the old {@code View.SYSTEM_UI_FLAG_*} bits are ignored by the
+     * platform, so a framework-only build would silently stay windowed on a modern
+     * phone. The compat controller picks the right mechanism per API level:
+     * {@code WindowInsetsController} where it exists, the legacy flags below 30.
+     */
     private void enterImmersive() {
         if (immersive) {
             return;
@@ -412,13 +436,18 @@ public class GuestActivity extends Activity implements GuestController.Listener 
         immersive = true;
         panelConnect.setVisibility(View.GONE);
         txtOverlay.setVisibility(View.GONE);
-        getWindow().getDecorView().setSystemUiVisibility(
-                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                        | View.SYSTEM_UI_FLAG_FULLSCREEN
-                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+        // Two knobs have to agree here: the window stops insetting the content
+        // (setDecorFitsSystemWindows) *and* the root stops consuming insets
+        // (fitsSystemWindows). Leaving the XML attribute on while the window is
+        // unconstrained would keep padding the video away from the edges.
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        root.setFitsSystemWindows(false);
+        WindowInsetsControllerCompat controller =
+                WindowCompat.getInsetsController(getWindow(), root);
+        controller.hide(WindowInsetsCompat.Type.systemBars());
+        // Swipe from an edge shows the bars temporarily instead of resizing the video.
+        controller.setSystemBarsBehavior(
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
     }
 
     private void exitImmersive() {
@@ -428,11 +457,15 @@ public class GuestActivity extends Activity implements GuestController.Listener 
         immersive = false;
         panelConnect.setVisibility(View.VISIBLE);
         txtOverlay.setVisibility(View.VISIBLE);
-        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+        WindowInsetsControllerCompat controller =
+                WindowCompat.getInsetsController(getWindow(), root);
+        controller.show(WindowInsetsCompat.Type.systemBars());
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), true);
+        root.setFitsSystemWindows(true);
     }
 
     // --------------------------------------------------------------------------
-    // Touch forwarding (the control channel - host side lands in milestone 2)
+    // Touch forwarding (the control channel - injection is milestone 2)
     // --------------------------------------------------------------------------
 
     /**
@@ -440,13 +473,13 @@ public class GuestActivity extends Activity implements GuestController.Listener 
      * normalised coordinates (0..10000 of the view's width/height).
      *
      * <p>Normalised rather than pixels because the guest's screen and the host's
-     * capture almost never share a resolution, and letterbox offsets must not leak
-     * into the coordinates. The host multiplies by its own display size on injection.
+     * capture almost never share a resolution, and letterbox offsets must not leak into
+     * the coordinates. The host multiplies by its own display size on injection.
      *
      * <p>Injection itself is the next milestone: an ordinary app cannot write into
      * another app's input stream, so the host will need an AccessibilityService
-     * ({@code dispatchGesture}) or a shell-level helper. The transport already works
-     * end to end - watch the host's log to see every touch arrive.
+     * ({@code dispatchGesture}) or a shell-level helper. The transport already works end
+     * to end - watch the host's log to see every touch arrive.
      */
     private void setupTouchForwarding() {
         videoContainer.setOnTouchListener((view, event) -> {
@@ -479,8 +512,8 @@ public class GuestActivity extends Activity implements GuestController.Listener 
 
             long now = SystemClock.uptimeMillis();
             if (protocolAction == 2) {
-                // Throttle drag streams: 60 Hz of MOVE events would flood a link
-                // that is already carrying video.
+                // Throttle drag streams: 60 Hz of MOVE events would flood a link that
+                // is already carrying video.
                 boolean movedEnough = Math.abs(nx - lastTouchX) > 0.004f
                         || Math.abs(ny - lastTouchY) > 0.004f;
                 if (now - lastTouchSentMs < 16 || !movedEnough) {
@@ -502,7 +535,8 @@ public class GuestActivity extends Activity implements GuestController.Listener 
     @Override
     public void onHostsChanged(List<GuestController.DiscoveredHost> hosts) {
         appendLog("discovery: " + hosts.size() + " host(s) visible");
-        renderHosts(hosts);
+        hostAdapter.submit(hosts);
+        txtNoHosts.setVisibility(hosts.isEmpty() ? View.VISIBLE : View.GONE);
     }
 
     @Override
@@ -521,8 +555,7 @@ public class GuestActivity extends Activity implements GuestController.Listener 
         btnConnect.setEnabled(false);
         btnDisconnect.setEnabled(true);
         txtStatus.setText(getString(R.string.guest_status_connected) + " · " + hostName);
-        txtOverlay.setText(R.string.guest_waiting_video);
-        txtOverlay.setVisibility(View.VISIBLE);
+        showOverlay(getString(R.string.guest_waiting_video));
         dotStatus.setActivated(true);
         txtStatSize.setText(streamWidth + "x" + streamHeight);
         applyVideoAspect();
@@ -614,7 +647,8 @@ public class GuestActivity extends Activity implements GuestController.Listener 
             long now = SystemClock.elapsedRealtime();
             final boolean first = !immersive;
             if (now - renderedWindowStartMs >= 1000 || first) {
-                final int fps = (int) (renderedWindow * 1000L / Math.max(1, now - renderedWindowStartMs));
+                final int fps =
+                        (int) (renderedWindow * 1000L / Math.max(1, now - renderedWindowStartMs));
                 renderedWindow = 0;
                 renderedWindowStartMs = now;
                 runOnUiThread(new Runnable() {
@@ -624,7 +658,7 @@ public class GuestActivity extends Activity implements GuestController.Listener 
                             enterImmersive();
                             txtStatus.setText(getString(R.string.guest_status_connected) + " · live");
                         }
-                        txtStatFps.setText(fps + " fps out · dropped "
+                        txtStatFps.setText(fps + " fps · dropped "
                                 + (decoder != null ? decoder.getDroppedInputs() : 0));
                     }
                 });
@@ -637,13 +671,66 @@ public class GuestActivity extends Activity implements GuestController.Listener 
                 @Override
                 public void run() {
                     appendLog("decoder error: " + message);
-                    txtOverlay.setText("Decoder error - reconnect to recover");
-                    txtOverlay.setVisibility(View.VISIBLE);
+                    showOverlay("Decoder error - reconnect to recover");
                     dotStatus.setSelected(true);
+                    Snackbar.make(root, "Decoder error: " + message, Snackbar.LENGTH_LONG).show();
                 }
             });
         }
     };
+
+    // --------------------------------------------------------------------------
+    // RecyclerView adapter for discovered hosts
+    // --------------------------------------------------------------------------
+
+    /**
+     * RecyclerView 1.1.0's adapter contract is the classic one: create a holder by
+     * inflating item_host.xml, then bind a host into it. Rows are recycled as the list
+     * scrolls, which is why binding must always set every field - a recycled row still
+     * holds the previous host's text.
+     */
+    private final class HostAdapter extends RecyclerView.Adapter<HostAdapter.HostHolder> {
+
+        private final List<GuestController.DiscoveredHost> hosts = new ArrayList<>();
+
+        void submit(List<GuestController.DiscoveredHost> updated) {
+            hosts.clear();
+            hosts.addAll(updated);
+            notifyDataSetChanged();
+        }
+
+        @NonNull
+        @Override
+        public HostHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+            View row = LayoutInflater.from(parent.getContext())
+                    .inflate(R.layout.item_host, parent, false);
+            return new HostHolder(row);
+        }
+
+        @Override
+        public void onBindViewHolder(@NonNull HostHolder holder, int position) {
+            final GuestController.DiscoveredHost host = hosts.get(position);
+            holder.name.setText(host.name);
+            holder.addr.setText(host.host + ":" + host.port);
+            holder.itemView.setOnClickListener(v -> connectTo(host.host, host.port, "mDNS"));
+        }
+
+        @Override
+        public int getItemCount() {
+            return hosts.size();
+        }
+
+        final class HostHolder extends RecyclerView.ViewHolder {
+            final TextView name;
+            final TextView addr;
+
+            HostHolder(View row) {
+                super(row);
+                name = row.findViewById(R.id.txtHostName);
+                addr = row.findViewById(R.id.txtHostAddr);
+            }
+        }
+    }
 
     // --------------------------------------------------------------------------
     // Helpers

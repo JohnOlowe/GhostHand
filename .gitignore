@@ -1,40 +1,13 @@
-# ---- toolchain (recreated by `bash toolchain/setup.sh`, ~170 MB) ----
+# toolchain download cache / installed tools (recreated by setup.sh + androidx.sh)
 toolchain/vendor/
 toolchain/env.sh
 
-# ---- build outputs: NEVER committed to the code branch ----
-# The APK is published to the history-less `apk` branch instead (see
-# toolchain/publish-apk.sh), so a fresh clone only ever downloads source history.
-build/
+# build outputs
 */build/
+build/
 *.apk
-*.aab
 *.dex
-*.ap_
-*.flat
-gen/
-out/
-bin/
-captures/
+*.idsig
 
-# ---- IDE / OS ----
-*.iml
-.idea/
-.DS_Store
-/.androidpe
-/.androidide
-/.acside
-
-# ---- Gradle (only used if you open the project in Android Studio) ----
-.gradle/
-.kotlin/
-local.properties
-.externalNativeBuild
-.cxx/
-
-# ---- signing ----
-# The checked-in keystore in keystore/ is a *shared debug* key, committed on
-# purpose so every build has an identical signature and installs over the last one.
-# Never commit a release key here.
-*.keystore.bak
-*.jks
+__pycache__/
+app/build/

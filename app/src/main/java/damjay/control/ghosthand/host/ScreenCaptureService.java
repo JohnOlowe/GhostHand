@@ -30,6 +30,9 @@ import damjay.control.ghosthand.HostActivity;
 import damjay.control.ghosthand.R;
 import damjay.control.ghosthand.net.Frame;
 import damjay.control.ghosthand.net.GhostProtocol;
+import androidx.core.app.NotificationCompat;
+import androidx.core.app.NotificationManagerCompat;
+
 import damjay.control.ghosthand.net.Record;
 
 /**
@@ -621,28 +624,29 @@ public class ScreenCaptureService extends Service
         PendingIntent stop = PendingIntent.getService(this, 1, stopIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        // Framework Notification.Builder (not NotificationCompat): the project has
-        // no AndroidX, and minSdk 26 means notification channels always exist, so
-        // the compatibility shim would add nothing anyway.
-        Notification.Builder builder = new Notification.Builder(this, CHANNEL_ID)
+        // NotificationCompat, not android.app.Notification.Builder: the compat builder
+        // applies the small-icon masking that Android 5+ requires (a full-colour icon
+        // is rendered as a white blob without it) and keeps the action/trampoline
+        // behaviour identical across API levels we support.
+        return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_stat_mirror)
                 .setContentTitle(getString(R.string.notif_title))
                 .setContentText(text)
                 .setContentIntent(open)
-                .addAction(new Notification.Action.Builder(
-                        null, getString(R.string.notif_stop), stop).build())
+                .addAction(0, getString(R.string.notif_stop), stop)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
-                .setCategory(Notification.CATEGORY_SERVICE)
-                .setVisibility(Notification.VISIBILITY_PUBLIC);
-        return builder.build();
+                .setCategory(NotificationCompat.CATEGORY_SERVICE)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .build();
     }
 
     private void updateNotification(String text) {
-        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        if (nm != null) {
-            nm.notify(NOTIFICATION_ID, buildNotification(text));
-        }
+        // NotificationManagerCompat.notify() is the same call on API 26+, but it is
+        // where the compat layer would drop the notification if the POST_NOTIFICATIONS
+        // grant is missing on Android 13+ instead of throwing SecurityException.
+        NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, buildNotification(text));
     }
 
     // --------------------------------- helpers --------------------------------

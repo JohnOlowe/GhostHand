@@ -1,58 +1,38 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  One row per discovered host. Inflated by GuestActivity with
-  LayoutInflater.inflate(R.layout.item_host, listHosts, false) and wired up in code,
-  which is why there is no onClick attribute here.
+  One row of the discovered-hosts list, inflated by HostAdapter in GuestActivity.
+  A MaterialCardView per row so each entry gets its own ripple.
 -->
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
+<com.google.android.material.card.MaterialCardView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    style="@style/Card.Clickable"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginBottom="8dp"
-    android:background="@drawable/bg_card_clickable"
-    android:clickable="true"
-    android:focusable="true"
-    android:gravity="center_vertical"
-    android:minHeight="60dp"
-    android:orientation="horizontal"
-    android:paddingStart="14dp"
-    android:paddingTop="10dp"
-    android:paddingEnd="14dp"
-    android:paddingBottom="10dp">
-
-    <ImageView
-        android:layout_width="22dp"
-        android:layout_height="22dp"
-        android:contentDescription="@null"
-        android:src="@drawable/ic_host" />
+    android:layout_marginBottom="6dp"
+    app:cardCornerRadius="12dp"
+    app:cardBackgroundColor="?attr/colorSurfaceVariant">
 
     <LinearLayout
-        android:layout_width="0dp"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginStart="12dp"
-        android:layout_weight="1"
-        android:orientation="vertical">
+        android:orientation="vertical"
+        android:padding="12dp">
 
         <TextView
             android:id="@+id/txtHostName"
-            style="@style/Text.Mono"
+            style="@style/Text.Title"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textSize="14sp"
-            tools:text="Pixel 7" />
+            android:textSize="15sp" />
 
         <TextView
             android:id="@+id/txtHostAddr"
-            style="@style/Text.Subtitle"
+            style="@style/Text.Mono"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textSize="12sp"
-            tools:text="192.168.1.42:47811" />
+            android:layout_marginTop="2dp"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:textSize="12sp" />
     </LinearLayout>
-
-    <TextView
-        style="@style/Text.Label"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/guest_connect" />
-</LinearLayout>
+</com.google.android.material.card.MaterialCardView>

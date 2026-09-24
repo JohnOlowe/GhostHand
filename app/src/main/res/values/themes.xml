@@ -1,57 +1,68 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<!--
+  Material 3 theme.
 
-    <!--
-      Framework-only theming.
+  `Theme.Material3.DayNight.NoActionBar` comes out of the material AAR (Material
+  Components for Android 1.10.0), which the toolchain links alongside appcompat,
+  recyclerview and constraintlayout. This is the one place the AndroidX port shows
+  up globally: everything below is a Material 3 *attribute*, so AppCompat widgets
+  and every com.google.android.material widget inherit the palette without a single
+  per-widget colour.
 
-      The parent is android:Theme.Material, which ships in the OS: no AppCompat and
-      no com.google.android.material dependency. That is a deliberate trade - it is
-      what lets this project be built by toolchain/build.sh (aapt2 + ECJ + D8) with
-      nothing but the platform android.jar, since AndroidX artifacts cannot be
-      fetched in a locked-down environment.
+  The colour names themselves live in values/colors.xml and values-night/colors.xml,
+  which is what makes DayNight free.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools">
 
-      Every override below is an android:* framework attribute, so the OS widgets
-      (Button, EditText, Switch, Spinner, ProgressBar) pick up the palette for free.
-    -->
-    <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@color/bg</item>
+    <style name="AppTheme" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Brand -->
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorOnPrimary">@color/on_accent</item>
+        <item name="colorPrimaryContainer">@color/accent_container</item>
+        <item name="colorOnPrimaryContainer">@color/on_accent_container</item>
+
+        <!-- Surfaces -->
         <item name="android:colorBackground">@color/bg</item>
-        <item name="android:colorPrimary">@color/surface_alt</item>
-        <item name="android:colorPrimaryDark">@color/bg</item>
-        <item name="android:colorAccent">@color/accent</item>
+        <item name="colorSurface">@color/surface</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+        <item name="colorSurfaceVariant">@color/surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/text_secondary</item>
+        <item name="colorOutline">@color/outline</item>
+        <item name="colorError">@color/error</item>
+
+        <!-- System bars -->
         <item name="android:statusBarColor">@color/bg</item>
         <item name="android:navigationBarColor">@color/bg</item>
-        <item name="android:textColorPrimary">@color/text_primary</item>
-        <item name="android:textColorSecondary">@color/text_secondary</item>
-        <item name="android:textColorHint">@color/text_secondary</item>
-        <item name="android:colorControlNormal">@color/text_secondary</item>
-        <item name="android:colorControlActivated">@color/accent</item>
+        <!-- Dark icons on a light status bar (values-v23 differs per scheme via
+             the windowLightStatusBar boolean below). -->
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">true</item>
     </style>
 
     <!-- ============================== text =================================
-         Dot-separated style names inherit implicitly from the part before the dot,
-         and aapt2 REQUIRES that base style to exist. So Text and Stat are declared
-         first; Text.Title then picks up their common attributes for free.
+         Dot-separated style names inherit implicitly from the part before the
+         dot, and aapt2 REQUIRES that base style to exist, so Text and Stat are
+         declared first and the specific styles pick up their attributes.
     -->
 
     <style name="Text">
-        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:textColor">?attr/colorOnSurface</item>
         <item name="android:textSize">14sp</item>
     </style>
 
     <style name="Text.Title">
-        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:textColor">?attr/colorOnSurface</item>
         <item name="android:textSize">20sp</item>
         <item name="android:textStyle">bold</item>
     </style>
 
     <style name="Text.Subtitle">
-        <item name="android:textColor">@color/text_secondary</item>
+        <item name="android:textColor">?attr/colorOnSurfaceVariant</item>
         <item name="android:textSize">14sp</item>
     </style>
 
     <style name="Text.Label">
-        <item name="android:textColor">@color/text_secondary</item>
+        <item name="android:textColor">?attr/colorOnSurfaceVariant</item>
         <item name="android:textSize">11sp</item>
         <item name="android:textAllCaps">true</item>
         <item name="android:letterSpacing">0.08</item>
@@ -59,17 +70,19 @@
 
     <style name="Text.Mono">
         <item name="android:fontFamily">monospace</item>
-        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:textColor">?attr/colorOnSurface</item>
         <item name="android:textSize">13sp</item>
     </style>
 
+    <!-- ============================== stats ================================ -->
+
     <style name="Stat">
-        <item name="android:textColor">@color/accent</item>
+        <item name="android:textColor">?attr/colorPrimary</item>
         <item name="android:fontFamily">monospace</item>
     </style>
 
     <style name="Stat.Value">
-        <item name="android:textColor">@color/accent</item>
+        <item name="android:textColor">?attr/colorPrimary</item>
         <item name="android:fontFamily">monospace</item>
         <item name="android:textSize">20sp</item>
         <item name="android:textStyle">bold</item>
@@ -77,34 +90,60 @@
 
     <!-- ============================ containers ============================= -->
 
-    <style name="Card">
-        <item name="android:background">@drawable/bg_card</item>
-        <item name="android:padding">16dp</item>
+    <!--
+      Card styling now comes from MaterialCardView itself
+      (app:cardBackgroundColor / app:cardCornerRadius / app:strokeColor), so these
+      two styles only carry the padding and the ripple behaviour. bg_card*.xml from
+      the framework-only build is still in res/drawable for the logo tiles.
+    -->
+    <style name="Card" parent="Widget.Material3.CardView.Filled">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="cardBackgroundColor">?attr/colorSurface</item>
+        <item name="strokeColor">@color/border</item>
+        <item name="cardCornerRadius">18dp</item>
+        <item name="cardElevation">0dp</item>
     </style>
 
-    <!-- Explicit parent: "Card.Clickable" would otherwise need a style named Card,
-         which does exist above, but being explicit keeps the intent obvious. -->
     <style name="Card.Clickable" parent="Card">
-        <item name="android:background">@drawable/bg_card_clickable</item>
         <item name="android:clickable">true</item>
         <item name="android:focusable">true</item>
+        <item name="rippleColor">?attr/colorPrimary</item>
     </style>
 
-    <!-- ============================== widgets ============================== -->
+    <!-- ============================= components ============================ -->
+
+    <!-- Base style first: aapt2 requires the parent named by a dotted style to
+         exist, so `Toolbar` must be declared before `Toolbar.App`. -->
+    <style name="Toolbar" parent="Widget.Material3.Toolbar" />
+
+    <style name="Toolbar.App">
+        <item name="android:background">?attr/colorSurface</item>
+        <item name="titleTextColor">?attr/colorOnSurface</item>
+        <item name="titleCentered">false</item>
+    </style>
 
     <!--
-      Framework Buttons tint their background with colorAccent, which is a bright
-      green here, so the label has to be forced dark to stay readable.
+      The exposed dropdown (Material's replacement for a bare Spinner) is a
+      TextInputLayout wrapping a MaterialAutoCompleteTextView. app:endIconMode must
+      be on the *TextInputLayout* style, hence the dedicated style below.
     -->
-    <style name="Button.Primary" parent="@android:style/Widget.Material.Button">
-        <item name="android:textColor">#04140D</item>
-        <item name="android:textAllCaps">false</item>
-        <item name="android:textSize">15sp</item>
+    <style name="Dropdown" parent="Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu" />
+
+    <style name="Dropdown.Host">
+        <item name="boxStrokeColor">@color/outline</item>
+        <item name="hintTextColor">?attr/colorOnSurfaceVariant</item>
     </style>
 
-    <style name="Button.Quiet" parent="@android:style/Widget.Material.Button.Borderless">
-        <item name="android:textColor">@color/accent</item>
-        <item name="android:textAllCaps">false</item>
-        <item name="android:textSize">14sp</item>
+    <style name="Input" parent="Widget.Material3.TextInputLayout.OutlinedBox.Dense" />
+
+    <style name="Input.Host">
+        <item name="boxStrokeColor">@color/outline</item>
+        <item name="hintTextColor">?attr/colorOnSurfaceVariant</item>
+    </style>
+
+    <style name="TextAppearance.Mono.Label" parent="TextAppearance.Material3.LabelSmall">
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:textColor">?attr/colorOnSurfaceVariant</item>
     </style>
 </resources>
