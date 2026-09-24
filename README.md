@@ -201,7 +201,8 @@ resources *before* aapt2 ever runs.
 
 ### R8 and the keep rules nobody generated for us
 
-The release build is shrunk and optimised by R8 (5.4 MB debug -> **2.2 MB** release). With
+The release build is shrunk and optimised by R8 (5.5 MB debug -> **2.5 MB** release, and six
+dex files down to one). With
 AGP, the "keep the manifest components" rules are generated automatically; here there is no
 AGP, so `app/proguard.pro` carries them by hand. Without those few lines R8 would rename or
 strip the very classes Android instantiates from the manifest and the app would die with
