@@ -7,11 +7,31 @@
 # with ClassNotFoundException on launch. These rules are the replacement for
 # AGP's automatic keep rules - keep them in sync with the manifest.
 
-# --- manifest components: Android instantiates these by name ----------------
+# --- framework-instantiated classes -----------------------------------------
+#
+# These are the classes Android itself creates, by name, from AndroidManifest.xml.
+# R8's call graph cannot see that happening, so it does not even know they are
+# instantiated - and that has a consequence beyond the obvious one:
+#
+#   R8 keeps a method that *overrides a library method* only for classes it knows
+#   can be instantiated. A class only the framework instantiates looks uninstantiated,
+#   so its lifecycle overrides are dead code to R8, so they are deleted, so any state
+#   they set looks like it is never set, and R8 can then delete the *readers* too.
+#
+# That cascade is not hypothetical: the accessibility service below was reduced to its
+# two static methods by exactly this chain (onServiceConnected removed ->
+# "instance" could never be non-null -> dispatchGesture unreachable -> whole injection
+# path gone), and only the release build was affected. toolchain/../verify_apk.py now
+# checks the built APK for the casualties, but the fix is here: keep these classes whole.
 -keep class damjay.control.ghosthand.MainActivity { *; }
 -keep class damjay.control.ghosthand.HostActivity { *; }
 -keep class damjay.control.ghosthand.GuestActivity { *; }
 -keep class damjay.control.ghosthand.host.ScreenCaptureService { *; }
+-keep class damjay.control.ghosthand.host.InjectionAccessibilityService { *; }
+
+# The anonymous GestureResultCallback inside the accessibility service is a separate
+# class; -keep on the outer class does not cover it.
+-keep class damjay.control.ghosthand.host.InjectionAccessibilityService$* { *; }
 
 # Anything reached from the framework by name (listeners, callbacks) stays too.
 # `-keepnames` on the package is a cheap safety net against renaming a class the

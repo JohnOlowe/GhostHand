@@ -114,6 +114,12 @@ public class ScreenCaptureService extends Service
     /** Target frame rate for the whole session. */
     private static final int FPS = 30;
 
+    /**
+     * Buffers guest touches into gestures. One instance for the whole service: a
+     * DOWN/MOVE/UP sequence is one gesture, so the state has to live across events.
+     */
+    private final TouchInjector touchInjector = new TouchInjector();
+
     private int videoWidth;
     private int videoHeight;
     private int rotation;
@@ -420,6 +426,8 @@ public class ScreenCaptureService extends Service
     private void stopEverything(String reason, boolean keepErrorState) {
         Log.i(TAG, "stopEverything: " + reason);
         main.removeCallbacks(statsTick);
+        // Drop a half-finished drag: injecting it later would tap some random app.
+        touchInjector.reset();
 
         if (hub != null) {
             hub.stop();
@@ -542,6 +550,43 @@ public class ScreenCaptureService extends Service
     @Override
     public void onLog(String message) {
         log(message);
+    }
+
+    /**
+     * Guest touch -> host gesture. Runs on the reader thread; the injector's decision
+     * logic is thread-safe by construction (one instance, only this method touches it)
+     * and only the dispatch itself hops to the main thread.
+     */
+    @Override
+    public void onGuestTouch(String clientName, int action, int xNormalized,
+                             int yNormalized, long timeMs) {
+        InjectionAccessibilityService injector = InjectionAccessibilityService.instance();
+        if (injector == null) {
+            // No accessibility grant: still acknowledge the gesture so the guest's
+            // user learns why nothing happens, but do not spam a log line per event.
+            if (action == TouchInjector.ACTION_DOWN) {
+                log("touch from " + clientName + " ignored - enable touch control "
+                        + "(accessibility) on this phone");
+            }
+            return;
+        }
+
+        int[] size = injector.displaySize();
+        int x = TouchInjector.toPixels(xNormalized, size[0]);
+        int y = TouchInjector.toPixels(yNormalized, size[1]);
+
+        TouchInjector.Gesture gesture = touchInjector.onTouch(action, x, y, timeMs);
+        if (gesture == null) {
+            return; // still buffering a drag, or a cancelled gesture
+        }
+        // dispatchGesture must be called on the main thread.
+        final TouchInjector.Gesture ready = gesture;
+        main.post(() -> {
+            InjectionAccessibilityService svc = InjectionAccessibilityService.instance();
+            if (svc != null && svc.inject(ready)) {
+                log("injected " + ready + " from " + clientName);
+            }
+        });
     }
 
     // ------------------------------- telemetry --------------------------------

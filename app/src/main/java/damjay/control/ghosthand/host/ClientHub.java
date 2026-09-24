@@ -53,6 +53,16 @@ public class ClientHub implements ClientConnection.Listener {
         void onClientCountChanged(int clients);
 
         void onLog(String message);
+
+        /**
+         * A touch the guest sent. Delivered on a socket reader thread (not the main
+         * thread) because it is on the latency-critical path: a round trip through
+         * the main looper before injection would be visible to the user's finger.
+         * The implementation is responsible for getting onto the main thread only
+         * where the platform requires it (dispatchGesture does).
+         */
+        void onGuestTouch(String clientName, int action, int xNormalized, int yNormalized,
+                          long timeMs);
     }
 
     private final int port;
@@ -284,11 +294,15 @@ public class ClientHub implements ClientConnection.Listener {
                 break;
             case GhostProtocol.TYPE_TOUCH: {
                 Record t = frame.asRecord();
-                log(String.format(java.util.Locale.US, "touch from %s: action=%d x=%.4f y=%.4f",
-                        connection.getName(),
-                        (int) t.getInt("action", -1),
-                        t.getInt("xN", 0) / 10000.0,
-                        t.getInt("yN", 0) / 10000.0));
+                Listener l = listener;
+                if (l == null) {
+                    break;
+                }
+                l.onGuestTouch(connection.getName(),
+                        (int) t.getInt("action", TouchInjector.ACTION_CANCEL),
+                        (int) t.getInt("xN", 0),
+                        (int) t.getInt("yN", 0),
+                        t.getInt("timeMs", System.currentTimeMillis()));
                 break;
             }
             case GhostProtocol.TYPE_BYE:

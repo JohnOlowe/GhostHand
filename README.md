@@ -10,10 +10,11 @@ cloud, no accounts. Two phones on the same network, one APK, two roles:
 | **Host** | Captures its own screen (`MediaProjection`), encodes it to H.264 (`MediaCodec`) and serves it over TCP. |
 | **Guest** | Finds the host with mDNS (or an IP you type), decodes the H.264 and draws it full screen. |
 
-**Milestone 1 (this build): screen mirroring.** Touch passthrough is designed into the
-protocol already - the guest sends real touch events and the host logs them - but
-injecting them into another app is milestone 2 (see
-[Touch, and why it is not done yet](#touch-and-why-it-is-not-done-yet)).
+**Milestones 1 and 2 (this build): mirroring *and* touch.** The guest already sent touch
+events; the host now actually injects them, so dragging on the guest moves the real cursor
+on the host's screen. The last hop needs a permission an ordinary app cannot have, and the
+whole mechanism is explained in [Touch injection](#touch-injection) - including the R8
+keep-rule trap that silently deleted it from the release APK.
 
 Package `damjay.control.ghosthand` · minSdk 26 (Android 8.0) · targetSdk 34 · Java, no Kotlin · **AndroidX + Material 3**
 
@@ -24,7 +25,7 @@ Package `damjay.control.ghosthand` · minSdk 26 (Android 8.0) · targetSdk 34 ·
 ```bash
 git clone https://github.com/JohnOlowe/GhostHand.git
 cd GhostHand
-bash build.sh                 # setup + AndroidX + 40 unit tests + signed APK (~2.5 min cold)
+bash build.sh                 # setup + AndroidX + 63 unit tests + signed APK (~2.5 min cold)
 ```
 
 `build.sh` installs the toolchain into `toolchain/vendor` (JRE, Eclipse compiler, aapt2,
@@ -98,8 +99,9 @@ assembles a working Android toolchain from PyPI, npm and GitHub:
 bash toolchain/setup.sh              # once: verifies every tool by running it
 bash toolchain/androidx.sh           # once: fetches + assembles AndroidX (~35 s, in vendor/)
 bash toolchain/check.sh  app         # fast "does it compile?" loop (~20 s)
-bash toolchain/test.sh   app         # JUnit unit tests for the wire protocol
+bash toolchain/test.sh   app         # JUnit unit tests (~2 s, no device needed)
 bash toolchain/build.sh  app --release --verify
+python3 verify_apk.py    app/build/app.apk   # did R8 keep what the app needs?
 ```
 
 `toolchain/README.md` documents each script; `RECIPE.md` explains where the tools come from
@@ -167,17 +169,22 @@ strip the very classes Android instantiates from the manifest and the app would 
 `ClassNotFoundException` on launch. The file also keeps the names of all `View` subclasses,
 because `AppCompatViewInflater` resolves widget classes **by name from the XML**.
 
-Two rules in there are load-bearing and easy to get wrong:
+Three rules in there are load-bearing and easy to get wrong:
 
 * `-keepattributes InnerClasses` **requires** `EnclosingMethod` in the same directive, or R8
   refuses the build outright (`Attribute InnerClasses requires EnclosingMethod attribute`);
 * `-keepnames class damjay.control.ghosthand.**` protects the classes the platform looks up
-  by name (`android:name=".HostActivity"`, the service, saved-state keys).
+  by name (`android:name=".HostActivity"`, the service, saved-state keys);
+* the `InjectionAccessibilityService` keep pair - without it R8 deletes the entire touch
+  feature from the release APK while the debug APK keeps working. That story is told in full
+  under [the keep rule that saved the release build](#the-keep-rule-that-saved-the-release-build-a-genuinely-nasty-one),
+  and it is now enforced by a check rather than by vigilance.
 
-The published APK is verified structurally after shrinking: `apktool` decodes it back to
-smali and resources, and the check confirms `MainActivity`, `HostActivity`, `GuestActivity`,
-`ScreenCaptureService` and every layout-referenced Material widget are still present **under
-their original names**.
+The published APK is verified structurally after shrinking, in two ways: `apktool` decodes it
+back to smali and resources to confirm the components are there **under their original names**,
+and `verify_apk.py` asserts the classes, the framework call strings and the accessibility
+resource are still in the artifact (`build.sh` runs it; `publish-apk.sh` refuses to publish
+without it).
 
 ---
 
@@ -186,7 +193,7 @@ their original names**.
 ```
 app/src/main/java/damjay/control/ghosthand/
 ├── MainActivity.java            pick a role; the launcher activity
-├── HostActivity.java            host dashboard: permission flow + live stats
+├── HostActivity.java            host dashboard: permission flow, stats, touch switch
 ├── GuestActivity.java           guest screen: discovery, video surface, touch capture
 │
 ├── net/                         the wire protocol - NO android.* imports, unit-tested
@@ -200,7 +207,9 @@ app/src/main/java/damjay/control/ghosthand/
 │   ├── ScreenEncoder.java         MediaCodec H.264 encoder fed by a Surface
 │   ├── ClientHub.java             TCP server; one ClientConnection per guest
 │   ├── ClientConnection.java      per-guest queue + writer thread + reader thread
-│   └── HostController.java        mDNS advertise + "my IP addresses" listing
+│   ├── HostController.java        mDNS advertise + "my IP addresses" listing
+│   ├── TouchInjector.java         gesture planner: guest points -> one stroke - NO android.*
+│   └── InjectionAccessibilityService.java  the only thing allowed to inject input
 │
 └── guest/                       everything that runs on the phone doing the watching
     ├── GuestController.java       mDNS discovery + socket + frame dispatch
@@ -429,10 +438,13 @@ frame forever.
 
 ---
 
-## Touch, and why it is not done yet
+## Touch injection
 
-The guest already sends touch events. Drag on the mirrored picture and it converts each
-gesture to **normalised** coordinates:
+The guest converts every touch to **normalised** coordinates and sends them; the host turns
+them back into a real gesture and hands it to Android. Both halves have a subtlety worth
+knowing about.
+
+### The guest half: normalised, not pixels
 
 ```java
 float nx = event.getX() / (float) view.getWidth();    // 0.0 .. 1.0
@@ -444,28 +456,126 @@ letterbox offsets must not leak into the coordinates. `ACTION_MOVE` is throttled
 the finger moved less than 0.4% of the view, or less than 16 ms has passed): 60 Hz of drag
 events would otherwise compete with the video for a WiFi link that is already saturated.
 
-**The host receives these today** - watch its log while you drag on the guest and every event
-arrives, correctly scaled. What is missing is the last hop: *injecting* them. An ordinary app
-cannot write into another app's input stream, so milestone 2 needs one of:
+### The host half: `dispatchGesture` needs a permission app code cannot get
 
-* an `AccessibilityService` with `dispatchGesture()` (no root, but the user has to enable the
-  service in Settings, and it cannot do everything a shell can), or
-* a shell/root helper running `input tap`/`input swipe` (full fidelity, needs adb or root).
+Writing into another app's input stream is exactly the thing Android is built to prevent. The
+only no-root, no-adb door is an **`AccessibilityService`** with
+`android:canPerformGestures="true"`, which can post a `GestureDescription` to the input system:
 
-That choice is deliberately left open; the transport is finished either way.
+```java
+GestureDescription.StrokeDescription stroke =
+        new GestureDescription.StrokeDescription(path, startMs, durationMs);
+service.dispatchGesture(new GestureDescription.Builder().addStroke(stroke).build(),
+                        callback, null /* handler: dispatch on the calling thread */);
+```
+
+That is a big capability, so the user has to switch it on by hand in Settings > Accessibility.
+Three things follow from that, and all three are handled in code:
+
+* **The service may not be running.** `InjectionAccessibilityService.isEnabled(context)`
+  reads `Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES` - reliable *before* the service has
+  even bound - and `HostActivity` re-checks it in `onResume()` so the card is correct the
+  moment you come back from Settings. The button deep-links to
+  `Settings.ACTION_ACCESSIBILITY_SETTINGS`.
+* **The service must be findable from a static context.** The framework instantiates it, so it
+  cannot be created by our code; it publishes itself as `static instance()` from
+  `onServiceConnected` and clears that in `onUnbind`/`onDestroy`.
+* **Nothing may leak across a teardown.** If the guest lifts its finger while the stream is
+  dying, a half-finished drag could be injected into whatever app is on top afterwards.
+  `stopEverything()` calls `touchInjector.reset()`, which can only produce a `CANCEL`.
+
+Two manifest attributes carry the whole feature and neither is optional:
+`android:exported="true"` (the *system* is a different process and has to reach the service)
+and `android.permission.BIND_ACCESSIBILITY_SERVICE` (the security boundary - it means only
+the system may bind, which is why `exported="true"` is not a hole).
+
+### `TouchInjector`: the part that is pure Java, and therefore testable
+
+Everything above needs a phone. The *decision* of what gesture to send does not, so it lives
+in a class that imports no `android.*` at all and is covered by unit tests:
+
+```
+DOWN(x0,y0)  MOVE(x1,y1)  MOVE(x2,y2)  UP(x2,y2)
+                  |
+                  v   TouchInjector.plan()
+        Gesture { xs[], ys[], offsetsMs[], durationMs }
+                  |
+                  v   InjectionAccessibilityService.inject()
+        GestureDescription -> dispatchGesture()
+```
+
+The rules it enforces, each born from a bug that happened in practice:
+
+| rule | why |
+|---|---|
+| A **tap is a one-point stroke** held for the real press duration. | `dispatchGesture` has no "click"; a stroke of one point whose length is the press is the only faithful translation. |
+| MOVE points closer than **6 px** are merged. | A slow finger emits hundreds of nearly identical points; each one would become a `Path` segment and a slop-sensitive jitter. |
+| ...but a move under **12 px** does **not** move the tap. | Otherwise a shaky press walks the tap across the screen and its duration collapses to 0. The press **anchor** is tracked separately from the trailing point for exactly this reason. |
+| Points are capped at **64** per gesture, evenly sampled. | `dispatchGesture` rejects enormous `Path`s, and a drop is cheaper than a rejection. |
+| Duration is clamped to **40 ms .. 30 s**. | Below the floor a stroke is a mis-tap; above the ceiling the input system refuses it. |
+
+A drag is dispatched on finger **lift**, not continuously. `dispatchGesture` posts a completed
+gesture, so a *live* drag (the host screen following your finger in real time) is not possible
+without streaming each segment - which would mean many small gestures and a visible stutter.
+This is the honest limitation of the no-root path and it is noted in the UI; the root/adb
+alternative (`input swipe`) is left for a later milestone.
+
+### The keep rule that saved the release build (a genuinely nasty one)
+
+The finished feature worked perfectly in the debug APK and did **nothing** in the release APK -
+no crash, no error, just a service that reported success and moved nothing. The reason is worth
+internalising:
+
+```
+R8 cannot see Android.                                    release APK, before the keep rule:
+  ...so nothing instantiates the AccessibilityService.     InjectionAccessibilityService:
+  ...so its onServiceConnected() looks like dead code.       static instance()   -> always null
+  ...so `instance` is provably null at every read.           onServiceConnected  -> DELETED
+  ...so every reader, and dispatchGesture() behind it,       dispatchGesture     -> DELETED
+     is provably dead and gets deleted.                     displaySize         -> DELETED
+```
+
+Every step is locally correct and the *build still succeeds*, which is why this class of bug is
+so expensive: the compiler, `apksigner` and a structurally-valid dex all tell you the APK is
+fine. The fix is two keep rules in `app/proguard.pro`:
+
+```proguard
+-keep class damjay.control.ghosthand.host.InjectionAccessibilityService { *; }
+-keep class damjay.control.ghosthand.host.InjectionAccessibilityService$* { *; }
+```
+
+The second line matters too: `GestureResultCallback` is an inner class the framework calls back
+into, and a keep rule on the outer class does not cover it.
+
+**And then the lesson was turned into a test.** Trusting a keep rule is how this happened in the
+first place, so `verify_apk.py` checks the *artifact* on every build - `build.sh` runs it, and
+`publish-apk.sh` refuses to publish without it:
+
+```bash
+python3 verify_apk.py app/build/app.apk
+# ok  APK VERIFY PASSED  (15 classes, 14 call strings, 5 resources present)
+```
+
+It asserts three things that a compiler cannot: the framework-facing **classes** are present
+under their original names (the manifest looks them up by string), the **call strings** the app
+depends on are still in the dex (`dispatchGesture`, `onServiceConnected`, `displaySize`, ...),
+and the **resources** survived linking (`canPerformGestures` in the compiled XML, the service
+entry in the binary manifest). Deliberately deleting the two keep rules above makes it fail
+with exactly the three methods R8 removed - the regression is reproducible and now caught
+before anything is signed or shipped.
 
 ---
 
 ## Tests
 
-`net/` deliberately imports nothing from `android.*`, which means the wire format can be
-tested on a plain JVM - no device, no emulator, ~20 ms:
+`net/` and `host/TouchInjector` deliberately import nothing from `android.*`, so the wire
+format **and the gesture planner** can be tested on a plain JVM - no device, no emulator:
 
 ```bash
-bash toolchain/test.sh app
+bash toolchain/test.sh app --source 8
 # JUnit version 4.13.2
-# ........................................
-# OK (40 tests)
+# .......................................................
+# OK (63 tests)
 ```
 
 What is covered:
@@ -480,14 +590,20 @@ What is covered:
 * `GhostProtocolTest` - sizing maths (16-alignment for any screen/preset combination, aspect
   preservation, no upscaling, encoder minimums), bitrate clamp, and that header size, port,
   service type and type numbers stay sane and distinct.
+* `TouchInjectorTest` (23 tests) - tap and drag planning, the slop rules (a sub-12 px wobble
+  during a press must **not** move the tap or shorten its duration - a real bug this caught),
+  the 40 ms/30 s duration clamps, monotonic non-decreasing offsets, point reduction past 64,
+  a MOVE arriving with no DOWN, `reset()` producing a CANCEL, coordinate clamping at the
+  screen edges, and a full scroll round trip from one normalised `MOVE` to one stroke.
 
-**What cannot be tested here:** anything that needs the Android runtime (ART). There is no
-emulator in this environment, so `MediaProjection`, `MediaCodec`, the activities and the
-AndroidX widgets are verified by compilation, dexing (D8 and R8 both accept the bytecode, R8
-with the keep rules above), and structurally - `apktool` decodes the APK back to smali and
-resources, the check confirms the manifest components survived shrinking under their original
-names, and every `findViewById(R.id.x)` is cross-checked against the layouts. On-device
-behaviour still needs two phones.
+**What cannot be tested here:** anything that needs the Android runtime (ART) - and that now
+includes `dispatchGesture` itself. There is no emulator in this environment, so
+`MediaProjection`, `MediaCodec`, `dispatchGesture`, the activities and the AndroidX widgets are
+verified by compilation, dexing (D8 and R8 both accept the bytecode, R8 with the keep rules
+above), and structurally: `apktool` decodes the APK back to smali and resources, `verify_apk.py`
+asserts the injection classes and call strings survived shrinking, and every
+`findViewById(R.id.x)` is cross-checked against the layouts. On-device behaviour still needs two
+phones.
 
 ---
 
@@ -503,6 +619,8 @@ behaviour still needs two phones.
 | Notification missing on Android 13+ | `POST_NOTIFICATIONS` was denied. The stream still works; only the notification is hidden. |
 | `LambdaMetafactory cannot be resolved` | `toolchain/vendor/core-lambda-stubs.jar` is missing - re-run `bash toolchain/setup.sh`. |
 | `no AARs found` / AndroidX errors | re-run `bash toolchain/androidx.sh` (it needs GitHub reachable for the ~11 MB blobless clone). |
+| Dragging on the guest does nothing, host log shows touches arriving | the accessibility service is off. Host dashboard > **Touch control** > *Open settings* > enable "GhostHand touch control". |
+| Touch worked in the debug APK, not the release one | R8 deleted the injection path - the `InjectionAccessibilityService` keep pair is missing from `app/proguard.pro`. `python3 verify_apk.py` catches this in one second. |
 | R8 fails with an `InnerClasses`/`EnclosingMethod` message | `app/proguard.pro` lost that pair from `-keepattributes`; they must stay together. |
 | Release build crashes on launch with `ClassNotFoundException` | a manifest component was shrunk or renamed: check the `-keep` lines at the top of `app/proguard.pro`. |
 
@@ -515,12 +633,14 @@ app/                        the Android application
   src/main/AndroidManifest.xml
   src/main/java/...         4 packages: net, host, guest + 3 activities
   src/main/res/             layouts (Material 3), drawables, values + values-night
-  src/test/java/...         JUnit tests for the wire protocol
+  src/main/res/xml/         accessibility_service_config.xml (canPerformGestures=true)
+  src/test/java/...         JUnit tests for the wire protocol + the gesture planner
   proguard.pro              keep rules for the R8 release build (no AGP to generate them)
 toolchain/                  the Android build system (no SDK, no Gradle) - see its README
 keystore/                   the stable debug key every build is signed with
 gradle.properties           signing credentials (single source of truth)
-build.sh                    one command: setup -> AndroidX -> tests -> signed APK
+build.sh                    one command: setup -> AndroidX -> tests -> signed APK -> verify it
+verify_apk.py               assert R8 kept the classes/calls/resources the app needs
 publish-apk.sh              push the APK to the single-commit `apk` branch
 RECIPE.md                   how the SDK-less toolchain was assembled, and what fails
 sample/                     toy framework-only project used as a toolchain smoke test
@@ -529,11 +649,15 @@ sample-androidx/            toy AndroidX project: AppCompat + Material 3 + Recyc
 
 ## Roadmap
 
-1. **Mirroring** - done, this build.
-2. **Touch injection** - transport done; needs an `AccessibilityService` or a shell helper on
-   the host.
-3. **Multi-touch and pressure** - the `TOUCH` record already has a `pointer` field.
+1. **Mirroring** - done.
+2. **Touch injection** - done: single-finger taps and drags through
+   `AccessibilityService.dispatchGesture()`. A drag is dispatched on lift (see
+   [Touch injection](#touch-injection)); live streaming of a drag needs a root or adb helper.
+3. **Multi-touch, pressure and hardware keys** - the `TOUCH` record already reserves a
+   `pointer` field, and `GestureDescription` supports several strokes at once, so pinch/zoom is
+   a `TouchInjector` change plus a guest-side pointer-id map.
 4. **Audio** - `AudioPlaybackCapture` on the host, `AudioTrack` on the guest, same `ClientHub`
    fan-out.
 5. **Hardening** - the protocol is plaintext and unauthenticated on a trusted LAN; a pairing
-   step and TLS would be the next step before this is used anywhere else.
+   step and TLS would be the next step before this is used anywhere else. Touch injection
+   raises the stakes: an unauthenticated guest can now drive the host.

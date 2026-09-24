@@ -6,6 +6,10 @@
 #   bash build.sh --publish    ... and push it to the history-less `apk` branch
 #   bash build.sh --quick      skip the unit tests
 #
+# The APK is verified in both configurations (verify_apk.py): R8 can delete code the
+# framework reaches by name, and the release APK is the only artifact a phone ever
+# sees, so the artifact itself is checked rather than trusted.
+#
 # No Gradle and no Android SDK: see toolchain/README.md. AndroidX (appcompat,
 # Material 3, RecyclerView, ConstraintLayout) is fetched from a committed Gradle
 # cache by toolchain/androidx.sh and linked automatically - see RECIPE.md §9.
@@ -39,14 +43,14 @@ done
 
 bold() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 
-bold "1/4 toolchain"
+bold "1/5 toolchain"
 if [ -x toolchain/vendor/jre/bin/java ] && [ -s toolchain/vendor/ecj.jar ]; then
   echo "already installed in toolchain/vendor (delete it to force a re-download)"
 else
   bash toolchain/setup.sh --api "$API"
 fi
 
-bold "2/4 AndroidX"
+bold "2/5 AndroidX"
 if [ -s toolchain/vendor/androidx/androidx.jar ]; then
   echo "already assembled in toolchain/vendor/androidx"
 else
@@ -57,13 +61,13 @@ else
 fi
 
 if [ "$RUN_TESTS" = "1" ]; then
-  bold "3/4 unit tests"
+  bold "3/5 unit tests"
   bash toolchain/test.sh app --source "$SOURCE"
 else
-  bold "3/4 unit tests (skipped)"
+  bold "3/5 unit tests (skipped)"
 fi
 
-bold "4/4 APK"
+bold "4/5 APK"
 EXTRA=()
 [ "$RELEASE" = "1" ] && EXTRA+=(--release)
 VERSION_CODE="$VERSION_CODE" VERSION_NAME="$VERSION_NAME" \
@@ -71,6 +75,10 @@ VERSION_CODE="$VERSION_CODE" VERSION_NAME="$VERSION_NAME" \
        --verify "${EXTRA[@]+"${EXTRA[@]}"}"
 
 APK="app/build/app.apk"
+
+bold "5/5 verify the artifact"
+python3 verify_apk.py "$APK"
+
 bold "done"
 echo "  $APK  ($(du -h "$APK" | cut -f1))"
 echo

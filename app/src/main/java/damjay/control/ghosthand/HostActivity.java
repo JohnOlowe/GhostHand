@@ -11,6 +11,7 @@ import android.content.pm.PackageManager;
 import android.media.projection.MediaProjectionManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.ArrayAdapter;
@@ -35,6 +36,7 @@ import java.util.List;
 import java.util.Locale;
 
 import damjay.control.ghosthand.host.HostController;
+import damjay.control.ghosthand.host.InjectionAccessibilityService;
 import damjay.control.ghosthand.host.ScreenCaptureService;
 import damjay.control.ghosthand.net.GhostProtocol;
 
@@ -86,6 +88,9 @@ public class HostActivity extends AppCompatActivity {
     private MaterialAutoCompleteTextView spnResolution;
     private TextInputLayout boxResolution;
     private MaterialSwitch swMirror;
+    private View dotTouch;
+    private TextView txtTouchStatus;
+    private MaterialButton btnTouchSettings;
 
     private HostController addressHelper;
     private String currentAddress;
@@ -147,6 +152,9 @@ public class HostActivity extends AppCompatActivity {
         spnResolution = findViewById(R.id.spnResolution);
         boxResolution = findViewById(R.id.boxResolution);
         swMirror = findViewById(R.id.swMirror);
+        dotTouch = findViewById(R.id.dotTouch);
+        txtTouchStatus = findViewById(R.id.txtTouchStatus);
+        btnTouchSettings = findViewById(R.id.btnTouchSettings);
 
         addressHelper = new HostController();
 
@@ -157,6 +165,14 @@ public class HostActivity extends AppCompatActivity {
         if (ScreenCaptureService.isStreaming()) {
             appendLog("re-attached to a running session");
         }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // The user may be returning from Accessibility settings, where the grant is
+        // made. There is no callback for that, so re-read it whenever we come back.
+        refreshTouchStatus();
     }
 
     @Override
@@ -226,6 +242,18 @@ public class HostActivity extends AppCompatActivity {
         });
 
         swMirror.setOnCheckedChangeListener(this::onMirrorToggled);
+
+        btnTouchSettings.setOnClickListener(v -> {
+            // Android deliberately gives no API to enable an accessibility service:
+            // only the user, in Settings, can grant this. So all we can do is open
+            // the right screen - and say so in the UI rather than pretend otherwise.
+            try {
+                startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                showMessage(getString(R.string.host_touch_enable));
+            } catch (RuntimeException e) {
+                appendLog("could not open accessibility settings: " + e.getMessage());
+            }
+        });
 
         findViewById(R.id.btnGuestMode).setOnClickListener(v ->
                 startActivity(new Intent(this, GuestActivity.class)));
@@ -432,6 +460,25 @@ public class HostActivity extends AppCompatActivity {
             sb.append(addresses.get(i));
         }
         txtAddress.setText(sb.toString());
+    }
+
+    /**
+     * Reflects the accessibility grant in the UI.
+     *
+     * <p>Checked against the system's enabled-services list rather than against
+     * {@code InjectionAccessibilityService.instance()}: the service binds
+     * asynchronously, and this activity can be on screen before it does.
+     */
+    private void refreshTouchStatus() {
+        boolean enabled = InjectionAccessibilityService.isEnabled(this);
+        dotTouch.setActivated(enabled);
+        dotTouch.setSelected(false);
+        txtTouchStatus.setText(enabled
+                ? R.string.host_touch_enabled
+                : R.string.host_touch_disabled);
+        btnTouchSettings.setText(enabled
+                ? R.string.host_touch_open_settings
+                : R.string.host_touch_enable);
     }
 
     private void showMessage(String message) {

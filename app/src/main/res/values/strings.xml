@@ -66,6 +66,24 @@
     <string name="guest_waiting_video">Waiting for the video stream…</string>
     <string name="guest_bad_ip">That does not look like an IP address</string>
 
+    <!-- =========================== accessibility ========================= -->
+    <!--
+      Shown on the system Accessibility screen. It has to describe what the service
+      does before the user switches it on, so it says plainly that guest touches are
+      replayed here.
+    -->
+    <string name="accessibility_service_label">GhostHand touch control</string>
+    <string name="accessibility_service_summary">Lets a paired guest phone tap and scroll on this screen</string>
+    <string name="accessibility_service_description">GhostHand replays touches that arrive from a guest phone you connected (over WiFi) onto this screen, so the guest can tap and scroll here. Nothing is recorded and no screen content is read: this service only performs gestures.</string>
+
+    <string name="host_touch_label">Touch control</string>
+    <string name="host_touch_enabled">Enabled — guests can tap and scroll</string>
+    <string name="host_touch_disabled">Disabled — the guest can watch but not touch</string>
+    <string name="host_touch_enable">Enable in Settings</string>
+    <string name="host_touch_open_settings">Open Accessibility settings</string>
+    <string name="host_touch_note">Android only lets an accessibility service inject touches. Enable GhostHand touch control once and it stays on; you can switch it off in the same place.</string>
+    <string name="host_touch_hint">Tap and drag on the guest to control this phone. Drags land when the finger lifts.</string>
+
     <!-- ============================ notification ========================== -->
     <string name="notif_channel_name">Screen mirroring</string>
     <string name="notif_channel_desc">Shown while GhostHand is capturing and serving this screen</string>

@@ -5,9 +5,9 @@
 #
 # WHY A SEPARATE BRANCH
 # ---------------------
-# The APK is ~110 KB and changes on every build. Committing it to `main` would add a
-# new blob to history on every push, so `git clone` would hand you every APK ever
-# built, forever. Binary blobs do not delta-compress like source does, so that grows
+# The APK is ~2.2 MB (release, R8) and changes on every build. Committing it to
+# `main` would add a new blob to history on every push, so `git clone` would hand you
+# every APK ever built, forever. Binary blobs do not delta-compress like source does, so that grows
 # without bound.
 #
 # Instead the APK lives on its own branch, and every publish REPLACES that branch
@@ -66,6 +66,13 @@ else
   SIGNER="(apksigner not installed - signature not re-checked)"
 fi
 
+# A valid signature says nothing about whether R8 kept the code the framework reaches
+# by name - check that too, so a shrunk-away feature can never be published.
+if ! python3 verify_apk.py "$APK"; then
+  echo "refusing to publish: $APK is missing required classes or resources" >&2
+  exit 1
+fi
+
 SHA256="$(sha256sum "$APK" | awk '{print $1}')"
 SIZE="$(du -h "$APK" | cut -f1)"
 SOURCE_REV="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
@@ -108,7 +115,7 @@ APK installs straight over the previous one - no uninstalling.
 ## Build it yourself
 
 \`\`\`bash
-bash build.sh                                 # setup + AndroidX + 40 unit tests + signed APK
+bash build.sh                                 # setup + AndroidX + 63 unit tests + signed APK
 \`\`\`
 EOF
 README_BLOB="$(git hash-object -w "$README_FILE")"

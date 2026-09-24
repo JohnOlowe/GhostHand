@@ -83,6 +83,35 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
+        <!-- ===================== TOUCH INJECTION (milestone 2) ============ -->
+        <!--
+          Declares the accessibility service that performs the guest's touches here.
+
+          Two attributes are non-negotiable:
+            * android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+              means only the SYSTEM may bind to this service. Without it any app
+              could connect and drive the injector - it is the security boundary of
+              the whole feature, not boilerplate.
+            * android:exported="true" is required the other way round: the system is
+              a different process, so it must be able to reach the service.
+
+          The service does nothing until the user enables it in
+          Settings -> Accessibility (canPerformGestures in the referenced config XML
+          is what allows dispatchGesture once they do).
+        -->
+        <service
+            android:name=".host.InjectionAccessibilityService"
+            android:exported="true"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
     </application>
 
 </manifest>
