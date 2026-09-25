@@ -293,9 +293,25 @@ dex() {
     local pgconf="$PROJ/proguard.pro"
     local extra=()
     [ -f "$pgconf" ] && extra=(--pg-conf "$pgconf")
+    # R8 never reads AndroidManifest.xml. The activities and services the *framework*
+    # instantiates by name look to R8 like ordinary unused classes, so it deletes them -
+    # which shipped once: the splash activity was in the manifest and not in any keep
+    # list, and the release APK could not launch. AGP generates these rules from the
+    # merged manifest; manifest_keep.py does it here, from ours, so a newly declared
+    # component cannot be forgotten. verify_apk.py independently checks the finished APK
+    # against the same manifest, so even a bypass of this step gets caught.
+    local manifest_keep
+    manifest_keep="$(mktemp "${TMPDIR:-/tmp}/ghosthand-manifest-keep.XXXXXX")"
+    # TC_DIR, not GH_TOOLCHAIN: GH_TOOLCHAIN is the *vendor* directory; the generator
+    # is a checked-in tool next to this script.
+    python3 "$TC_DIR/manifest_keep.py" ${MANIFEST:+"$MANIFEST"} --out "$manifest_keep" \
+      || { rm -f "$manifest_keep"; die "could not generate manifest keep rules"; }
+    extra+=(--pg-conf "$manifest_keep")
     "$JAVA" -cp "$D8_JAR" com.android.tools.r8.R8 --release --dex \
       --min-api "$min_api" "${libs[@]}" "${extra[@]}" "$@" \
-      --output "$out" $classes "${ax[@]}" || die "R8 failed"
+      --output "$out" $classes "${ax[@]}" \
+      || { local rc=$?; rm -f "$manifest_keep"; die "R8 failed"; }
+    rm -f "$manifest_keep"
   else
     "$JAVA" -cp "$D8_JAR" com.android.tools.r8.D8 \
       --min-api "$min_api" "${libs[@]}" "$@" \

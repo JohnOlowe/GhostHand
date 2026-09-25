@@ -53,8 +53,12 @@ SOURCE=8            # 8 = compile against the real Android API surface (see RECI
 # versionCode 2 fixes the launch crash of versionCode 1 (missing Kotlin runtime):
 # a new code lets the store/ adb update path be seen to work, and the same code is used
 # for both configurations, which is what keeps them installable over each other.
-VERSION_CODE=2
-VERSION_NAME=0.2.1-androidx
+# versionCode 3: versionCode 2's release build could not launch - R8 deleted
+# SplashActivity because the component keeps were a hand-written list that did not know
+# about it. Both configurations always share the code, so they stay installable over
+# each other and over anything older.
+VERSION_CODE=3
+VERSION_NAME=0.2.2-androidx
 MODE="release"      # release | debug | both
 PUBLISH=0
 RUN_TESTS=1

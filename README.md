@@ -646,6 +646,23 @@ resource behind your back (it split the accessibility config into `res/xml/` and
 `res/xml-v22/` the moment minSdk dropped below 22, keeping `canPerformGestures` only in the
 copy a modern device loads, which is correct and looked like a bug for ten minutes).
 
+And it checks every component the manifest declares. **R8 never reads
+`AndroidManifest.xml`** - it shrinks from the classes it is told about, so an activity or
+service that only the framework will instantiate by name looks like an unused class and gets
+deleted. The build handles that with `toolchain/manifest_keep.py`, which generates the keep
+rules AGP would have generated and passes them to R8 as a second `--pg-conf`; `verify_apk.py`
+then re-derives the component list from the manifest and fails if any of them is absent from
+the finished dex. Both use the same parser, so they cannot drift apart.
+
+That check exists because its predecessor was a hand-written block in `proguard.pro` that
+opened with *"keep them in sync with the manifest."* The splash activity went into the
+manifest and not onto the list, R8 deleted it, and the published release APK could not
+launch - `ClassNotFoundException` at the first frame. The debug APK was unshrunk and worked
+fine, which is how it survived one device before anyone noticed. The lesson is the same one
+`api-levels.txt` and `packaging-allowlist.txt` already teach: a list someone must remember to
+update is a bug with a delay fuse, so make the list derive from the thing it describes and
+fail the build when they disagree.
+
 It also proves the APK is **self-contained**. Every type the dex names under `androidx.*`,
 `com.google.*`, `kotlin.*`, `kotlinx.*` or our own package must be defined *in that APK*,
 or listed in `packaging-allowlist.txt` with a reason - and an entry that stops suppressing
@@ -869,6 +886,7 @@ phones.
 | Black screen in a secure app | expected: `AUTO_MIRROR` is distrusted by the system for banking/DRM windows. Switch the host to `PUBLIC` mode. |
 | Picture freezes and then recovers | the decoder dropped a frame and is waiting for the next key frame (2 s). `dropped` in the guest's stats tells you it happened. |
 | `INSTALL_PARSE_FAILED_NO_CERTIFICATES` on an old phone | the APK has no v1 (JAR) signature, which is all Android 6.0 and older understand. `toolchain/lib.sh` enables it automatically when `min-api < 24`; a build made with a higher `--min-api` will not install there. |
+| `ClassNotFoundException` for one of your own activities at launch | the release build shrank away a class the manifest declares. The keep rules are generated from the manifest at dex time (`toolchain/manifest_keep.py`) and `verify_apk.py` fails a build missing any component - if you see this, something regenerated one without the other. Debug APK unaffected: it is never shrunk. |
 | The launcher icon still shows the green robot | the build is serving a cached resource table - `rm -rf app/build` and rebuild, or the icon resources were replaced without rebuilding. `python3 design/make_assets.py --check` says whether the files on disk match the design. |
 | The splash shows glass and ripples but no hand | the hand bitmap was recycled while the animation was still on screen (paused and released are different things - see `SplashView.pause()` / `release()`). Only reproducible by leaving and returning to the splash mid-animation. |
 | `INSTALL_FAILED_OLDER_SDK` on Android 4.4 | you are installing the **debug** APK, which declares minSdk 21 (six dex files, and Dalvik loads one). Use the release APK. |
@@ -903,6 +921,8 @@ verify_apk.py               assert R8 kept the classes/calls/resources the app n
 check_api.py                assert every framework call exists on minSdk (API 19)
 api-levels.txt              the declared exemptions, each with a level and a reason
 packaging-allowlist.txt     classes the APK references and does not contain, with reasons
+                            (manifest components are NOT listed anywhere by hand - they are
+                            generated from AndroidManifest.xml by manifest_keep.py)
 design/                     the icon and splash artwork, and the scripts that cut it up
   variant-b1-half-hand-mirror.png   the launcher mark (source of truth)
   splash-hand.png                   the splash hand, black on white for clean keying

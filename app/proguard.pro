@@ -1,37 +1,31 @@
 # R8 rules for the release build (toolchain/build.sh --release).
 #
-# There is no Android Gradle Plugin here, which means nobody generated the usual
-# "keep the manifest components" rules for us: R8 shrinks from the entry points it
-# is told about, so without this file it would happily strip or rename the very
-# classes Android instantiates from AndroidManifest.xml, and the app would crash
-# with ClassNotFoundException on launch. These rules are the replacement for
-# AGP's automatic keep rules - keep them in sync with the manifest.
-
-# --- framework-instantiated classes -----------------------------------------
+# Which rules live here is worth stating, because getting it wrong ships an APK that
+# cannot start:
 #
-# These are the classes Android itself creates, by name, from AndroidManifest.xml.
-# R8's call graph cannot see that happening, so it does not even know they are
-# instantiated - and that has a consequence beyond the obvious one:
+#   * Manifest components are NOT listed here any more. R8 never reads
+#     AndroidManifest.xml, so activities and services the framework instantiates by
+#     name look like unused classes and get deleted. This file used to carry a
+#     hand-written list of them, opening with "keep them in sync with the manifest" -
+#     and when the splash activity went into the manifest and not onto that list, R8
+#     deleted it and the published release APK could not launch at all (the unshrunk
+#     debug APK was fine, which is how it survived a device or two). Those rules are
+#     now generated from the manifest by toolchain/manifest_keep.py and passed to R8
+#     by toolchain/lib.sh, and verify_apk.py checks the finished APK against the same
+#     manifest. Do not re-add component keeps here; there would be two lists again.
 #
-#   R8 keeps a method that *overrides a library method* only for classes it knows
-#   can be instantiated. A class only the framework instantiates looks uninstantiated,
-#   so its lifecycle overrides are dead code to R8, so they are deleted, so any state
-#   they set looks like it is never set, and R8 can then delete the *readers* too.
+#   * What is below is what only a human can know: classes the platform reaches by
+#     name from XML, attributes that must survive shrinking, and the families that are
+#     deliberately absent. The manifest cannot say any of that.
 #
-# That cascade is not hypothetical: the accessibility service below was reduced to its
-# two static methods by exactly this chain (onServiceConnected removed ->
-# "instance" could never be non-null -> dispatchGesture unreachable -> whole injection
-# path gone), and only the release build was affected. toolchain/../verify_apk.py now
-# checks the built APK for the casualties, but the fix is here: keep these classes whole.
--keep class damjay.control.ghosthand.MainActivity { *; }
--keep class damjay.control.ghosthand.HostActivity { *; }
--keep class damjay.control.ghosthand.GuestActivity { *; }
--keep class damjay.control.ghosthand.host.ScreenCaptureService { *; }
--keep class damjay.control.ghosthand.host.InjectionAccessibilityService { *; }
-
-# The anonymous GestureResultCallback inside the accessibility service is a separate
-# class; -keep on the outer class does not cover it.
--keep class damjay.control.ghosthand.host.InjectionAccessibilityService$* { *; }
+# Why components are kept *whole* (the generator does this too): R8 keeps a method that
+# overrides a library method only for classes it knows can be instantiated. A class only
+# the framework instantiates looks uninstantiated, so its lifecycle overrides are dead
+# code, so they are deleted, so state they set looks never-set, and R8 then deletes the
+# readers too. That cascade reduced the accessibility service to its two static methods
+# once already: onServiceConnected removed -> "instance" never non-null ->
+# dispatchGesture unreachable -> whole injection path gone. -keep { *; } on the
+# component (and on its nested classes) is what stops it.
 
 # Anything reached from the framework by name (listeners, callbacks) stays too.
 # `-keepnames` on the package is a cheap safety net against renaming a class the

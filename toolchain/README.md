@@ -104,6 +104,21 @@ the lambdas were desugared (`invoke-custom` must not survive below API 26).
 Both are run by the root `build.sh`, after the APK is signed and before anything can be
 published.
 
+## Keeping the manifest's classes alive
+
+R8 never reads `AndroidManifest.xml`. The activities and services Android instantiates by
+name look to it like unused classes, so without help it deletes them and the app dies at
+launch with `ClassNotFoundException`. AGP generates keep rules from the merged manifest;
+`toolchain/manifest_keep.py` does the same here: `lib.sh` runs it during the release dex
+step and passes the result to R8 as a second `--pg-conf`.
+
+The rule for anything in this toolchain that must stay in sync with a source file: derive it
+from the source and fail when they disagree. This script used to be a comment in
+`proguard.pro` saying "keep them in sync with the manifest", and the splash activity's
+absence from that list shipped a release APK that could not start. `verify_apk.py` now
+re-parses the manifest with the same function and fails any APK missing a declared
+component, so even bypassing the generator is caught.
+
 ## Artwork: generated resources, not hand-edited files
 
 Two drawings in `design/` are the source of truth for everything visual: the launcher mark

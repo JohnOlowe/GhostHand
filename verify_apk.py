@@ -53,12 +53,11 @@ import zipfile
 # Classes the framework instantiates by name from AndroidManifest.xml, plus the core
 # of each subsystem. A missing one means the app is broken in a way no compiler sees.
 REQUIRED_CLASSES = [
-    # framework entry points (android:name=".Something")
-    "damjay/control/ghosthand/MainActivity",
-    "damjay/control/ghosthand/HostActivity",
-    "damjay/control/ghosthand/GuestActivity",
-    "damjay/control/ghosthand/host/ScreenCaptureService",
-    "damjay/control/ghosthand/host/InjectionAccessibilityService",
+    # NOTE: framework entry points (activities/services from the manifest) are NOT
+    # listed here - check_manifest_components() derives them from the manifest, so a
+    # newly declared component cannot be forgotten the way SplashActivity was. This
+    # list is for classes the *code* needs, which no manifest can say.
+
     # the protocol layer: pure Java, so if this is missing the app cannot talk at all
     "damjay/control/ghosthand/net/GhostProtocol",
     "damjay/control/ghosthand/net/FrameCodec",
@@ -262,18 +261,62 @@ def matches(type_name, entry):
     return type_name == entry
 
 
-def check_self_contained(dexes, blobs, allowlist_path, kind):
-    """Every app-space type the dex references must be in the APK or declared absent.
-
-    `kind` is "release", "debug" or None (unknown): it decides which allowlist entries
-    are expected in this artifact.
-    """
+def dex_type_tables(dexes, blobs):
+    """(defined, referenced) app-space names across every dex in the APK, stripped."""
     defined, referenced = set(), set()
     for name in dexes:
         d, r = dex_types(blobs[name])
         defined |= {t[1:-1] for t in d}       # Lfoo/Bar; -> foo/Bar, to match below
         referenced |= r
+    return defined, referenced
 
+
+def check_manifest_components(defined, manifest_path):
+    """Every component the manifest declares must be a class inside this APK.
+
+    Android instantiates these by name - it does not care what the dex contains beyond
+    the name existing - so a missing one is a guaranteed ClassNotFoundException at
+    launch, and nothing else in the pipeline sees it: R8 never reads the manifest, the
+    manifest's launcher line comes from the manifest, and the dex is perfectly valid
+    without the class. This shipped once, exactly that way.
+
+    The parser is the same one toolchain/manifest_keep.py uses to generate R8's keep
+    rules, deliberately: two parsers that agree are one parser with two callers, and
+    two that disagree would let the generator and the gate drift apart.
+    """
+    if not os.path.exists(manifest_path):
+        info("no manifest at %s - component check skipped" % manifest_path)
+        return 0
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "toolchain"))
+    from manifest_keep import components          # noqa: E402  (path set just above)
+    try:
+        _, found = components(open(manifest_path, encoding="utf-8").read(), manifest_path)
+    except SystemExit as exc:
+        return fail("cannot parse %s: %s" % (manifest_path, exc))
+    if not found:
+        return fail("%s declares no components at all - the parser is looking at the "
+                    "wrong file" % manifest_path)
+    missing = [cls for _, cls in found if cls.replace(".", "/") not in defined]
+    if missing:
+        problems = fail("%d manifest component(s) Android would instantiate are not in "
+                        "this APK:" % len(missing))
+        for cls in missing:
+            print("      %s" % cls)
+        print("      (R8 never reads the manifest, so it deletes classes only the "
+              "framework instantiates; toolchain/manifest_keep.py keeps them - "
+              "this is how the release APK shipped unable to launch)")
+        return problems
+    info("%d manifest components present (%s)"
+         % (len(found), ", ".join(sorted({t for t, _ in found}))))
+    return 0
+
+
+def check_self_contained(defined, referenced, allowlist_path, kind):
+    """Every app-space type the dex references must be in the APK or declared absent.
+
+    `kind` is "release", "debug" or None (unknown): it decides which allowlist entries
+    are expected in this artifact.
+    """
     declared = read_allowlist(allowlist_path)
     # Entries that apply here. With an unknown configuration every entry is a candidate
     # (coverage is the point) but staleness cannot be judged, so it is not.
@@ -380,12 +423,19 @@ def main(argv):
 
     # ------------------------------------------------- dex self-containment
     blobs = {name: archive.read(name) for name in dexes}
+    defined, referenced = dex_type_tables(dexes, blobs)
     debuggable = declared_debuggable(apk)
     problems += check_self_contained(
-        dexes, blobs,
+        defined, referenced,
         os.path.join(os.path.dirname(os.path.abspath(__file__)),
                      "packaging-allowlist.txt"),
         None if debuggable is None else ("debug" if debuggable else "release"))
+
+    # ------------------------------------------------- manifest components
+    problems += check_manifest_components(
+        defined,
+        os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "app", "src", "main", "AndroidManifest.xml"))
 
     for pattern, needle in REQUIRED_RESOURCE_STRINGS:
         entries = [n for n in names if fnmatch.fnmatch(n, pattern)]
