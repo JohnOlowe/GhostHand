@@ -104,6 +104,26 @@ the lambdas were desugared (`invoke-custom` must not survive below API 26).
 Both are run by the root `build.sh`, after the APK is signed and before anything can be
 published.
 
+## Artwork: generated resources, not hand-edited files
+
+Two drawings in `design/` are the source of truth for everything visual: the launcher mark
+and the splash hand. `design/make_assets.py` turns them into every density of launcher icon,
+the adaptive icon XML, the notification silhouette and the splash bitmap, and `--check` fails
+if the committed resources are stale. The reason to generate rather than edit: the same mark
+has to exist at five densities in three forms (legacy square, legacy round, adaptive
+foreground) plus a silhouette, and a hand-edited set is guaranteed to drift.
+
+Two things in it are worth remembering. The generated art arrives as a rounded tile on a
+white field, so a naive bounding box finds the white corners - `flatten_tile()` flood-fills
+the field away first (and swallows the tile's antialiased edge, which is invisible on a teal
+icon but becomes an outline once alpha is used as a shape). And the notification icon is
+derived from the launcher mark's alpha channel, because Android tints a notification icon and
+throws its colours away.
+
+`design/splash_preview.py` renders the splash animation off-device, reading its constants out
+of `SplashChoreography.java` so the preview cannot drift from the real thing. It is a
+replica, not proof - but it is how a hand that tapped upwards through the glass was caught.
+
 ## The Kotlin runtime, and why a Java-only app has one
 
 `toolchain/setup.sh` step 6c vendors `kotlin-stdlib.jar` and `kotlin-annotations.jar` from

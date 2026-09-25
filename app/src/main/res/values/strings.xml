@@ -97,4 +97,7 @@
 
     <!-- ================================= nsd ============================== -->
     <string name="nsd_service_name">GhostHand</string>
+    <!-- Splash: read aloud by TalkBack, which cannot describe an animation. -->
+    <string name="splash_description">A hand taps the screen, and the glass ripples</string>
+
 </resources>

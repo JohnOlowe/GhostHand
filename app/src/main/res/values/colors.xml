@@ -35,6 +35,15 @@
     <color name="text_primary">#191C1B</color>
     <color name="text_secondary">#414945</color>
 
+    <!--
+      Splash screen. Deliberately not in values-night/: the splash is the brand moment,
+      and the design is teal-on-mint with the hand as the only bright element. It looks
+      the same in the dark, which is what the mark's contrast was designed for.
+    -->
+    <color name="splash_teal_top">#02685B</color>
+    <color name="splash_teal_bottom">#01584E</color>
+    <color name="splash_glass">#A7F2DF</color>
+
     <!-- the mirror itself is always black, in both schemes -->
     <color name="video_background">#000000</color>
     <color name="video_overlay">#99000000</color>

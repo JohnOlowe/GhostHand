@@ -252,9 +252,13 @@ app/src/main/java/damjay/control/ghosthand/
 │   └── InjectionAccessibilityService.java  the only thing allowed to inject input
 │                                   (every API-24 type is in its nested Api24 class)
 │
+├── SplashActivity.java            the launcher entry point: two taps, then the app
+├── SplashView.java                draws the tap animation (gradient, glass, ripples, hand)
+│
 ├── util/
 │   ├── ApiLevels.java             which role each Android version can run - NO android.*
-│   └── CodecCompat.java           the one place MediaCodec's buffer API differs by version
+│   ├── CodecCompat.java           the one place MediaCodec's buffer API differs by version
+│   └── SplashChoreography.java    the splash timeline as arithmetic - NO android.*
 │
 └── guest/                       everything that runs on the phone doing the watching
     ├── GuestController.java       mDNS discovery + socket + frame dispatch
@@ -482,6 +486,55 @@ direction, the guest declares the link dead and closes it, rather than showing a
 frame forever.
 
 ---
+
+## The icon and the splash animation
+
+Both come from two drawings that live in `design/`, and everything the app ships is
+generated from them by `design/make_assets.py` - so changing the mark means replacing one
+PNG and re-running one script, not editing twenty files.
+
+**The icon** is a hand and its reflection either side of a thin glass line: the solid half is
+this phone, the translucent half is the screen it appears on. It ships as:
+
+| | |
+|---|---|
+| `mipmap-*/ic_launcher.webp` | the legacy square icon, 48-192 px - what Android 4.4-7.x uses |
+| `mipmap-*/ic_launcher_round.webp` | the same, circle-masked |
+| `mipmap-*/ic_launcher_foreground.webp` | the adaptive foreground (API 26+), art inside the 72 dp safe zone |
+| `values/ic_launcher_background.xml` | the adaptive background colour, `#00695C` |
+| `drawable-*/ic_stat_mirror.png` | the notification silhouette, white on transparency at 24-96 px |
+
+Two details that are worth knowing because they were bugs first. The generated artwork is a
+rounded tile on a **white field**, so "the bounding box of everything that is not the
+background" finds the four white corners and calls *those* the icon - `flatten_tile()` flood
+fills from the corners and swallows the antialiased tile edge, which otherwise becomes a
+visible outline the moment the alpha channel is used as a shape. And the notification icon
+is derived from the mark's own alpha rather than drawn separately: Android tints a
+notification icon and discards its colours, so the only thing that survives is the shape -
+and the mark's logic (solid here, ghost there) is already *in* the alpha.
+
+**The splash** is a hand tapping a sheet of glass: down, contact, ripples spread along the
+surface, up, pause, again - forever, or until you tap the screen. Two taps' worth is shown
+before the role picker appears.
+
+It is drawn, not played back. `SplashChoreography` owns the timeline as plain arithmetic -
+when the hand is where, when each ripple is born, how fast it fades - and is unit-tested
+without a screen. `SplashView` asks it one question per frame and draws the answer: a
+gradient, a glass line bent by a travelling wave, up to three ellipse ripples, a mirror copy
+of the hand below the glass, and one small bitmap for the hand itself. One number crosses
+between frames (the elapsed time), so the animation cannot drift.
+
+That split paid for itself immediately. `design/splash_preview.py` renders the same loop
+off-device, on the same numbers, read out of the Java source - and looking at its filmstrip
+is how the hand **tapping upwards through the glass** got caught. `handOffset()` is positive
+when the hand is raised, screen Y grows downwards, and the drawing code added instead of
+subtracting. On a phone it would have looked like a hand sinking into a screen and then
+bouncing up to touch it from below. No unit test would have said a word.
+
+```bash
+python3 design/make_assets.py --check   # are the shipped resources up to date?
+python3 design/splash_preview.py        # render the loop as a filmstrip
+```
 
 ## Android 4.4 and the version floors
 
@@ -765,8 +818,8 @@ tested on a plain JVM - no device, no emulator:
 ```bash
 bash toolchain/test.sh app --source 8
 # JUnit version 4.13.2
-# .....................................................................
-# OK (69 tests)
+# ...............................................................................
+# OK (79 tests)
 ```
 
 What is covered:
@@ -789,6 +842,12 @@ What is covered:
 * `ApiLevelsTest` (6 tests) - the version policy at every boundary: 9 is unsupported, 19
   and 20 are guest-only, 21-23 mirror without being controllable, 24 is the first that does
   everything, 24 through 35 all can.
+* `SplashChoreographyTest` (10 tests) - the splash timeline, which is arithmetic rather than
+  art: the hand descends monotonically and never dips below the glass except during the
+  press, every ripple is born after contact and is finished before the hand is back up,
+  ripples only ever widen and fade, the newest is always inside the oldest, the loop is
+  seamless by construction (`t` and `t + LOOP_MS` produce identical frames), and the
+  travelling wave is still before the tap and quiet at the far edge.
 
 **What cannot be tested here:** anything that needs the Android runtime (ART) - and that now
 includes `dispatchGesture` itself. There is no emulator in this environment, so
@@ -810,6 +869,8 @@ phones.
 | Black screen in a secure app | expected: `AUTO_MIRROR` is distrusted by the system for banking/DRM windows. Switch the host to `PUBLIC` mode. |
 | Picture freezes and then recovers | the decoder dropped a frame and is waiting for the next key frame (2 s). `dropped` in the guest's stats tells you it happened. |
 | `INSTALL_PARSE_FAILED_NO_CERTIFICATES` on an old phone | the APK has no v1 (JAR) signature, which is all Android 6.0 and older understand. `toolchain/lib.sh` enables it automatically when `min-api < 24`; a build made with a higher `--min-api` will not install there. |
+| The launcher icon still shows the green robot | the build is serving a cached resource table - `rm -rf app/build` and rebuild, or the icon resources were replaced without rebuilding. `python3 design/make_assets.py --check` says whether the files on disk match the design. |
+| The splash shows glass and ripples but no hand | the hand bitmap was recycled while the animation was still on screen (paused and released are different things - see `SplashView.pause()` / `release()`). Only reproducible by leaving and returning to the splash mid-animation. |
 | `INSTALL_FAILED_OLDER_SDK` on Android 4.4 | you are installing the **debug** APK, which declares minSdk 21 (six dex files, and Dalvik loads one). Use the release APK. |
 | `NoClassDefFoundError` right after installing | usually the multi-dex trap: a `minSdk < 21` APK with a `classes2.dex` is broken on Dalvik. `verify_apk.py` fails the build for exactly this. |
 | Touch does nothing, host is Android 5.0-6.x | injection needs Android 7.0. The host dashboard says so instead of offering the switch. |
@@ -842,6 +903,11 @@ verify_apk.py               assert R8 kept the classes/calls/resources the app n
 check_api.py                assert every framework call exists on minSdk (API 19)
 api-levels.txt              the declared exemptions, each with a level and a reason
 packaging-allowlist.txt     classes the APK references and does not contain, with reasons
+design/                     the icon and splash artwork, and the scripts that cut it up
+  variant-b1-half-hand-mirror.png   the launcher mark (source of truth)
+  splash-hand.png                   the splash hand, black on white for clean keying
+  make_assets.py                    generates every icon/splash resource from those two
+  splash_preview.py                 renders the splash loop off-device, as a filmstrip
 publish-apk.sh              push the APK to the single-commit `apk` branch
 RECIPE.md                   how the SDK-less toolchain was assembled, and what fails
 sample/                     toy framework-only project used as a toolchain smoke test

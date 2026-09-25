@@ -146,4 +146,20 @@
         <item name="android:fontFamily">monospace</item>
         <item name="android:textColor">?attr/colorOnSurfaceVariant</item>
     </style>
+
+<!--
+  The splash theme. Dot-name inheritance: Theme.GhostHand.Splash derives from
+  Theme.GhostHand, which derives from AppTheme, so it keeps the whole Material 3 setup
+  and changes exactly two things - no action bar (the animation owns the screen) and a
+  teal window background, so the frame the system shows before the activity draws is the
+  same colour as the animation's first frame instead of the theme's default surface.
+-->
+<style name="Theme.GhostHand" parent="AppTheme" />
+
+<style name="Theme.GhostHand.Splash" parent="Theme.GhostHand">
+    <item name="android:windowBackground">@color/splash_teal_top</item>
+    <item name="android:statusBarColor">@color/splash_teal_top</item>
+    <item name="android:navigationBarColor">@color/splash_teal_bottom</item>
+</style>
+
 </resources>
