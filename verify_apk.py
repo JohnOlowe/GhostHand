@@ -271,6 +271,54 @@ def dex_type_tables(dexes, blobs):
     return defined, referenced
 
 
+def check_vectors_not_stripped(names, archive):
+    """No vector drawable may ship with its base copy gutted by aapt2 versioning.
+
+    With `--min-sdk-version 19` and versioning enabled, aapt2 moves a vector's API-21
+    attributes (viewportWidth, fillColor, pathData) into `res/drawable-v21/` and leaves
+    the base as a `<vector>` with nothing in it. On a pre-21 device AppCompat's
+    VdcInflateDelegate inflates that base first, fails, and the fallback to the platform
+    fails too - a Resources$NotFoundException at launch. The release APK shipped exactly
+    that way: 59 of 74 drawable pairs were stripped, and the first one AppCompat probed
+    (`abc_vector_test`) was the one the log named.
+
+    The test is deliberately narrow: some `res/<qualifier>/name.xml` variant contains
+    `viewportWidth` (it is a vector) while the unqualified base does not (it was
+    stripped). Qualifier variants that legitimately differ - the accessibility config
+    split across xml/xml-v22 - never involve viewportWidth, so they do not trip it.
+    """
+    import collections
+    import re as _re
+    groups = collections.defaultdict(dict)
+    pattern = _re.compile(r"^res/([^/]+)/([^/]+\.xml)$")
+    for name in names:
+        match = pattern.match(name)
+        if match:
+            groups[match.group(2)][match.group(1)] = name
+    stripped = []
+    for fname, variants in groups.items():
+        if "drawable" not in variants or len(variants) < 2:
+            continue
+        base = archive.read(variants["drawable"])
+        if b"viewportWidth" in base:
+            continue
+        if any(b"viewportWidth" in archive.read(v)
+               for q, v in variants.items() if q != "drawable"):
+            stripped.append(fname)
+    if stripped:
+        problems = fail("%d vector drawable(s) ship a stripped base copy - aapt2 moved "
+                        "their API-21 attributes to a versioned variant:" % len(stripped))
+        for fname in sorted(stripped)[:8]:
+            print("      res/drawable/%s" % fname)
+        if len(stripped) > 8:
+            print("      ... and %d more" % (len(stripped) - 8))
+        print("      (pre-21 devices inflate the base file first and die with "
+              "Resources$NotFoundException; pass --no-version-vectors to aapt2 link)")
+        return problems
+    info("no stripped vector bases (aapt2 --no-version-vectors is in effect)")
+    return 0
+
+
 def check_manifest_components(defined, manifest_path):
     """Every component the manifest declares must be a class inside this APK.
 
@@ -430,6 +478,9 @@ def main(argv):
         os.path.join(os.path.dirname(os.path.abspath(__file__)),
                      "packaging-allowlist.txt"),
         None if debuggable is None else ("debug" if debuggable else "release"))
+
+    # ------------------------------------------------- vector base files
+    problems += check_vectors_not_stripped(names, archive)
 
     # ------------------------------------------------- manifest components
     problems += check_manifest_components(

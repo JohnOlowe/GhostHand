@@ -78,7 +78,8 @@ python3 check_api.py   app/build/stage/classes --min-api 19 \
 strings in the dex, required resources in the compiled XML, and the dex count against the
 manifest's own `minSdkVersion` - because Dalvik loads one dex file and a `minSdk < 21` APK
 with a second one is broken on exactly the phones it claims to support. It also understands
-that aapt2 version-qualifies a resource when a newer attribute is involved.
+that aapt2 version-qualifies a resource when a newer attribute is involved - and fails the
+build when that versioning gutted a vector's base copy (see the caveats below).
 
 `packaging-allowlist.txt` (repo root) is about the *finished APK*: every type the dex
 names under `androidx.*`, `com.google.*`, `kotlin.*`, `kotlinx.*` or the app's own package
@@ -210,3 +211,15 @@ and dependency versions are whatever the harvested cache contains.
   store password.
 * `vendor/` is gitignored and reproducible: deleting it and re-running `setup.sh`
   takes ~10 s, and `androidx.sh` rebuilds the AndroidX part in ~35 s.
+* aapt2 "versions" vector drawables when `--min-sdk-version` is below 21: it moves the
+  API-21 attributes (`viewportWidth`, `viewportHeight`, `fillColor`, `pathData`) into
+  `res/drawable-v21/` and leaves the base file as an empty `<vector>`. On a pre-21 phone
+  that base is what gets inflated - AppCompat's `VdcInflateDelegate` fails, the platform
+  fallback does not know `<vector>` either, and the app crashes at launch
+  (`Resources$NotFoundException` on the first vector probed, `abc_vector_test`). This
+  shipped as versionCode 3 with 59 of 74 drawable pairs stripped; `aapt2_link()` now
+  always passes `--no-version-vectors` (its help: "Use this only when building with
+  vector drawable support library" - which is exactly this build), and `verify_apk.py`
+  fails an APK whose base copy lacks `viewportWidth` while some versioned variant of the
+  same name still has it. AAR-shipped `drawable-v21/` variants and the `xml`/`xml-v22`
+  attribute split are unaffected.

@@ -33,7 +33,7 @@ Package `damjay.control.ghosthand` · **minSdk 19 (Android 4.4)** · targetSdk 3
 ```bash
 git clone https://github.com/JohnOlowe/GhostHand.git
 cd GhostHand
-bash build.sh                 # setup + AndroidX + 63 unit tests + signed APK (~2.5 min cold)
+bash build.sh                 # setup + AndroidX + 79 unit tests + signed APK (~2.5 min cold)
 ```
 
 `build.sh` installs the toolchain into `toolchain/vendor` (JRE, Eclipse compiler, aapt2,
@@ -645,6 +645,18 @@ count against the declared minSdk - and it understands that aapt2 may *version-q
 resource behind your back (it split the accessibility config into `res/xml/` and
 `res/xml-v22/` the moment minSdk dropped below 22, keeping `canPerformGestures` only in the
 copy a modern device loads, which is correct and looked like a bug for ten minutes).
+
+The same trick it applies correctly to attributes, though, it applies destructively to
+whole vector drawables: with minSdk 19 it moves a vector's API-21 elements (`viewportWidth`,
+`fillColor`, `pathData`) into `res/drawable-v21/` and leaves the base file as a gutted
+`<vector>`. Android 4.4 loads the base - AppCompat's pre-L `VdcInflateDelegate` fails on it,
+the platform fallback has never heard of `<vector>` - and the app dies at launch with
+`Resources$NotFoundException` naming the first vector it touched. That shipped as
+versionCode 3: 59 of 74 drawable pairs, including this app's own icons, were stripped. The
+build now passes `--no-version-vectors` to aapt2 link (the flag's own help text says to use
+it "when building with vector drawable support library", which is what we are), and
+`verify_apk.py` fails any APK where some `res/<qualifier>/x.xml` variant still contains
+`viewportWidth` but the unqualified base does not - so the bug cannot come back silently.
 
 And it checks every component the manifest declares. **R8 never reads
 `AndroidManifest.xml`** - it shrinks from the classes it is told about, so an activity or

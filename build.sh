@@ -53,12 +53,13 @@ SOURCE=8            # 8 = compile against the real Android API surface (see RECI
 # versionCode 2 fixes the launch crash of versionCode 1 (missing Kotlin runtime):
 # a new code lets the store/ adb update path be seen to work, and the same code is used
 # for both configurations, which is what keeps them installable over each other.
-# versionCode 3: versionCode 2's release build could not launch - R8 deleted
-# SplashActivity because the component keeps were a hand-written list that did not know
-# about it. Both configurations always share the code, so they stay installable over
-# each other and over anything older.
-VERSION_CODE=3
-VERSION_NAME=0.2.2-androidx
+# versionCode 4: versionCode 2's release build could not launch at all (R8 deleted the
+# unlisted SplashActivity); versionCode 3's could not launch on Android 4.4 (aapt2
+# gutted every vector's base copy, so AppCompat's pre-L vector probe died at startup).
+# Both configurations always share the code, so they stay installable over each other
+# and over anything older.
+VERSION_CODE=4
+VERSION_NAME=0.2.3-androidx
 MODE="release"      # release | debug | both
 PUBLISH=0
 RUN_TESTS=1

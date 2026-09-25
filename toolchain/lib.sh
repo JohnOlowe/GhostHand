@@ -227,6 +227,17 @@ aapt2_link() {
   [ -d "$ASSETS_DIR" ] && args+=(-A "$ASSETS_DIR")
   [ -n "${MIN_API:-}" ] && args+=(--min-sdk-version "$MIN_API")
   [ -n "${TARGET_API:-}" ] && args+=(--target-sdk-version "$TARGET_API")
+  # The support-library vector path, and aapt2 must not second-guess it. With
+  # --min-sdk-version 19 aapt2 otherwise "versions" every vector: the API-21 attributes
+  # (viewportWidth, fillColor, pathData) move to res/drawable-v21/ and the base file is
+  # left as a gutted <vector>. On a KitKat phone AppCompat's VdcInflateDelegate then
+  # inflates that base, fails ("tag requires viewportWidth > 0"), falls back to the
+  # platform which has never heard of <vector>, and the app dies at launch with
+  # Resources$NotFoundException. 59 of 74 drawable pairs shipped like that - including
+  # this app's own icons - because the flag's own description fits us exactly: "Use
+  # this only when building with vector drawable support library."
+  # verify_apk.py fails any APK whose base vectors are stripped, so this cannot rot.
+  args+=(--no-version-vectors)
   "$AAPT2" link "${args[@]}" "$@" || die "aapt2 link failed (this is the XML/resource compile step)"
 }
 

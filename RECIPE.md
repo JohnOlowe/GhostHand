@@ -158,6 +158,16 @@ aapt2 link -o app-unsigned.apk -I android.jar \
 
 * `--auto-add-overlay` is required when you pass `-R res.zip`, otherwise you get
   *"resource string/app_name does not override an existing resource"*.
+* If you build with the support-library vector path, add `--no-version-vectors`.
+  Otherwise aapt2 applies "resource versioning" to every `<vector>` when
+  `--min-sdk-version` is below 21: API-21 attributes move to `res/drawable-v21/` and
+  the base file ships as a gutted `<vector>`. Pre-L devices inflate the base first and
+  die with `Resources$NotFoundException` ("invalid drawable tag vector") - AppCompat's
+  `VdcInflateDelegate` fails the parse, and the platform fallback has never heard of
+  `<vector>`. The flag's help text says to use it "only when building with vector
+  drawable support library", which is precisely this situation. Keep legitimate
+  attribute-level versioning (`res/xml-v22/` for an API-22 attribute) - it is a
+  different mechanism and the flag does not touch it.
 * aapt2 reads the manifest **and** every resource: undefined `@string`, `@color`,
   `@style`, bad attribute names, malformed XML and API-31+ `android:exported`
   problems are all link-time errors. It is the authoritative XML check.
