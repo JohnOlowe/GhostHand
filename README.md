@@ -42,7 +42,7 @@ D8/R8, apksigner) and harvests AndroidX into `toolchain/vendor/androidx`, then p
 Want both configurations - the shrunk one and the unobfuscated one - in one go?
 
 ```bash
-bash build.sh --both          # + app/build/app-debug.apk (5.9 MB, debuggable, Android 5.0+)
+bash build.sh --both          # + app/build/app-debug.apk (5.8 MB, debuggable, Android 5.0+)
 
 adb install -r app/build/app.apk     # on BOTH phones
 ```
@@ -72,7 +72,7 @@ parentless commit**:
 | | file | runs on | what it is |
 |---|---|---|---|
 | **2.5 MB** | `GhostHand.apk` | **Android 4.4+** | the **release** build - R8 shrunk, renamed and inlined, one dex file. What to install. |
-| **5.9 MB** | `GhostHand-debug.apk` | Android 5.0+ | the **debug** build - nothing shrunk or renamed, genuinely `android:debuggable`, six dex files. |
+| **5.8 MB** | `GhostHand-debug.apk` | Android 5.0+ | the **debug** build - nothing shrunk or renamed, genuinely `android:debuggable`, six dex files. |
 
 Both are the *same app*: same package, same versionCode, same key, same signature scheme -
 so **either one installs straight over the other, in either order**, keeping your data.
@@ -201,7 +201,7 @@ resources *before* aapt2 ever runs.
 
 ### R8 and the keep rules nobody generated for us
 
-The release build is shrunk and optimised by R8 (5.9 MB debug -> **2.5 MB** release, and six
+The release build is shrunk and optimised by R8 (5.8 MB debug -> **2.5 MB** release, and six
 dex files down to one). With
 AGP, the "keep the manifest components" rules are generated automatically; here there is no
 AGP, so `app/proguard.pro` carries them by hand. Without those few lines R8 would rename or

@@ -5,7 +5,7 @@
 #                       [--no-push]
 #
 # Two APKs, one commit: the R8-shrunk release build (2.5 MB) and the unobfuscated debug
-# build (5.9 MB). Whichever you grab, it is the same app - same package, same key, same
+# build (5.8 MB). Whichever you grab, it is the same app - same package, same key, same
 # versionCode - so either installs straight over the other. That is checked below, not
 # assumed: a mismatched pair would fail with INSTALL_FAILED_UPDATE_INCOMPATIBLE on the
 # phone, which is a bad place to find out.
