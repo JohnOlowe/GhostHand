@@ -82,6 +82,13 @@ public class ScreenCaptureService extends Service
     public static final String EXTRA_MAX_SIDE = "maxSide";
     /** true = mirror the built-in display; false = behave like a second display. */
     public static final String EXTRA_MIRROR_FLAG = "mirrorFlag";
+    /**
+     * Broadcast extra, set only by the service: Android 14+ allows exactly one capture
+     * per consent grant, so changing the capture mode needs the system confirmation
+     * dialog again. The activity reacts by re-running its consent launcher; until the
+     * answer arrives the session keeps streaming on the mode it has now.
+     */
+    public static final String EXTRA_RECONSENT = "reconsent";
 
     /** Broadcast: something about the session changed (state, client count, log). */
     public static final String ACTION_STATE = "damjay.control.ghosthand.broadcast.STATE";
@@ -176,9 +183,25 @@ public class ScreenCaptureService extends Service
         if (ACTION_SET_MODE.equals(action)) {
             boolean mirror = intent.getBooleanExtra(EXTRA_MIRROR_FLAG, true);
             if (mirror != useMirrorFlag && projection != null) {
-                useMirrorFlag = mirror;
-                recreateVirtualDisplay();
-                log("capture mode: " + (mirror ? "AUTO_MIRROR" : "PUBLIC (second display)"));
+                if (CapturePolicy.needsFreshConsentForModeChange(Build.VERSION.SDK_INT)) {
+                    // Android 14+: the system marks a grant "used" the moment its first
+                    // virtual display exists (MediaProjectionManagerService.isValid():
+                    // mVirtualDisplayId != INVALID_DISPLAY) and every later
+                    // createVirtualDisplay throws SecurityException - releasing the old
+                    // display does not reset it. The only way to a fresh instance is a
+                    // fresh consent dialog, so ask the activity for one. This broadcast
+                    // reports the LIVE mode, not the requested one: the switch shows what
+                    // is actually capturing until the system says yes, and a "no" leaves
+                    // the session untouched (nothing is pending here).
+                    Log.i(TAG, "capture mode change needs a fresh consent (Android 14 one-capture rule)");
+                    broadcastState("capture mode change: confirm screen capture again in the system dialog");
+                } else {
+                    // Below 14 one grant may create displays one after another: swap
+                    // AUTO_MIRROR <-> PUBLIC in place, encoder and guests untouched.
+                    useMirrorFlag = mirror;
+                    recreateVirtualDisplay();
+                    log("capture mode: " + (mirror ? "AUTO_MIRROR" : "PUBLIC (second display)"));
+                }
             }
             return START_NOT_STICKY;
         }
@@ -203,12 +226,25 @@ public class ScreenCaptureService extends Service
         int resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0);
         android.content.Intent data = intent.getParcelableExtra(EXTRA_RESULT_DATA);
         maxSide = intent.getIntExtra(EXTRA_MAX_SIDE, 1280);
-        useMirrorFlag = intent.getBooleanExtra(EXTRA_MIRROR_FLAG, true);
+        boolean mirror = intent.getBooleanExtra(EXTRA_MIRROR_FLAG, true);
 
         if (data == null) {
             fail("no MediaProjection permission data in the start intent");
             return START_NOT_STICKY;
         }
+        if (projection != null && hub != null && hub.isRunning()) {
+            // A consent result while a session is already live is the answer to
+            // EXTRA_RECONSENT: a brand-new grant for a mode change. Swap it in without
+            // touching encoder, TCP server or guests (Android 14+ path only - below 14
+            // SET_MODE recreates the display in place and never re-prompts).
+            if (CapturePolicy.needsFreshConsentForModeChange(Build.VERSION.SDK_INT)) {
+                swapProjection(resultCode, data, mirror);
+            } else {
+                log("already streaming");
+            }
+            return START_NOT_STICKY;
+        }
+        useMirrorFlag = mirror;
         beginStreaming(resultCode, data);
         return START_NOT_STICKY;
     }
@@ -244,13 +280,18 @@ public class ScreenCaptureService extends Service
      * VIDEO_CONFIG followed by a fresh key frame, and their decoder restarts.
      */
     private void reconfigureCapture(String reason) {
+        // The VirtualDisplay must outlive the encoder: Android 14 forbids a second
+        // createVirtualDisplay on the same grant, and releasing + rebuilding was how a
+        // rotation on an Android 14 host crashed with the system's one-capture
+        // SecurityException. Detach the surface that is about to die, rebuild the
+        // encoder, then point the SAME display at the new surface at the new size -
+        // resize(), not recreate(). Guests keep their sockets throughout.
         if (virtualDisplay != null) {
             try {
-                virtualDisplay.release();
+                virtualDisplay.setSurface(null);
             } catch (RuntimeException ignored) {
                 // best effort
             }
-            virtualDisplay = null;
         }
         if (encoder != null) {
             encoder.stop();
@@ -258,7 +299,13 @@ public class ScreenCaptureService extends Service
         }
         try {
             createEncoder();
-            createVirtualDisplay();
+            if (virtualDisplay != null) {
+                virtualDisplay.resize(videoWidth, videoHeight,
+                        densityDpi > 0 ? densityDpi : 320);
+                virtualDisplay.setSurface(encoder.getInputSurface());
+            } else {
+                createVirtualDisplay();
+            }
             if (hub != null) {
                 hub.setGeometry(videoWidth, videoHeight, rotation);
             }
@@ -312,16 +359,7 @@ public class ScreenCaptureService extends Service
                 return;
             }
 
-            // If the user taps "Stop sharing" in the system notification/shade, the
-            // projection dies. We must notice, or the guest sees a frozen frame.
-            projectionCallback = new MediaProjection.Callback() {
-                @Override
-                public void onStop() {
-                    Log.i(TAG, "MediaProjection.onStop()");
-                    main.post(() -> stopEverything("screen capture permission revoked"));
-                }
-            };
-            projection.registerCallback(projectionCallback, main);
+            registerProjectionCallback(projection);
 
             computeCaptureSize();
 
@@ -360,6 +398,25 @@ public class ScreenCaptureService extends Service
             Log.e(TAG, "start failed", e);
             fail("start failed: " + e);
         }
+    }
+
+    /**
+     * Android 14 also refuses the first createVirtualDisplay unless a callback is
+     * registered on the grant ("No MediaProjection callback registered"), and the
+     * callback is how we notice the user tapped "Stop sharing" in the system shade -
+     * without it the guest would just see a frozen frame. One callback per live grant;
+     * {@link #projectionCallback} always tracks the current one so teardown and
+     * {@link #swapProjection} can unregister it before the grant is retired.
+     */
+    private void registerProjectionCallback(MediaProjection target) {
+        projectionCallback = new MediaProjection.Callback() {
+            @Override
+            public void onStop() {
+                Log.i(TAG, "MediaProjection.onStop()");
+                main.post(() -> stopEverything("screen capture permission revoked"));
+            }
+        };
+        target.registerCallback(projectionCallback, main);
     }
 
     private void createVirtualDisplay() {
@@ -406,6 +463,12 @@ public class ScreenCaptureService extends Service
      * Swap AUTO_MIRROR <-> PUBLIC without asking the user for permission again.
      * Only the VirtualDisplay is rebuilt: the flag is a property of the display,
      * not of the encoder, so the stream continues uninterrupted.
+     *
+     * <p>Legal only below Android 14, where one grant may create displays one after
+     * another. On 14+ the first createVirtualDisplay permanently marks the grant used
+     * and this would throw SecurityException from the system's own isValid() check -
+     * the ACTION_SET_MODE branch routes that case through a fresh consent instead
+     * (see {@link #swapProjection}).
      */
     private void recreateVirtualDisplay() {
         if (projection == null || encoder == null) {
@@ -420,6 +483,72 @@ public class ScreenCaptureService extends Service
             virtualDisplay = null;
         }
         createVirtualDisplay();
+    }
+
+    /**
+     * Android 14 mode change: put a freshly consented grant under the running session.
+     *
+     * <p>The encoder keeps encoding and the guests keep their sockets; only the
+     * permission token and its virtual display are replaced. Ordering matters at every
+     * step: the new grant is fetched <em>before</em> anything live is touched (if the
+     * system refuses, the session is simply unchanged), the old callback is
+     * unregistered before the old grant is stopped (or its onStop would tear the new
+     * session down), and the new display is the <em>first</em> one ever created on the
+     * new grant - which is exactly what Android 14 requires.
+     */
+    private void swapProjection(int resultCode, Intent data, boolean mirror) {
+        MediaProjectionManager manager =
+                (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+        MediaProjection next;
+        try {
+            next = manager.getMediaProjection(resultCode, data);
+        } catch (RuntimeException e) {
+            Log.e(TAG, "mode change: getMediaProjection failed", e);
+            broadcastState(); // live mode unchanged; the switch snaps back
+            return;
+        }
+        if (next == null) {
+            log("system refused the screen-capture permission");
+            broadcastState();
+            return;
+        }
+
+        MediaProjection oldProjection = projection;
+        MediaProjection.Callback oldCallback = projectionCallback;
+        if (oldCallback != null) {
+            try {
+                oldProjection.unregisterCallback(oldCallback);
+            } catch (RuntimeException ignored) {
+                // best effort
+            }
+        }
+        if (virtualDisplay != null) {
+            try {
+                virtualDisplay.release();
+            } catch (RuntimeException ignored) {
+                // best effort
+            }
+            virtualDisplay = null;
+        }
+        try {
+            oldProjection.stop();
+        } catch (RuntimeException ignored) {
+            // best effort
+        }
+
+        projection = next;
+        registerProjectionCallback(next);
+        useMirrorFlag = mirror;
+        try {
+            createVirtualDisplay(); // the first (and only) display on the fresh grant
+        } catch (RuntimeException e) {
+            // Android 14 will never create another display for either grant now, so the
+            // session cannot continue - and fail() retires `next`, which is live.
+            fail("could not apply capture mode: " + e);
+            return;
+        }
+        log("capture mode: " + (mirror ? "AUTO_MIRROR" : "PUBLIC (second display)"));
+        broadcastState();
     }
 
     // ------------------------------ teardown ---------------------------------
@@ -729,6 +858,16 @@ public class ScreenCaptureService extends Service
     // --------------------------------- helpers --------------------------------
 
     private void broadcastState() {
+        broadcastState(null);
+    }
+
+    /**
+     * @param reconsentMessage non-null asks the activity to re-run the MediaProjection
+     *        consent dialog (Android 14 one-capture-per-grant rule); the text is
+     *        appended to its log. "mirror" still carries the LIVE mode - the requested
+     *        one is not active until ACTION_START brings the fresh grant.
+     */
+    private void broadcastState(String reconsentMessage) {
         Intent intent = new Intent(ACTION_STATE);
         intent.setPackage(getPackageName());
         intent.putExtra("state", state);
@@ -737,6 +876,10 @@ public class ScreenCaptureService extends Service
         intent.putExtra("width", videoWidth);
         intent.putExtra("height", videoHeight);
         intent.putExtra("mirror", useMirrorFlag);
+        if (reconsentMessage != null) {
+            intent.putExtra(EXTRA_RECONSENT, true);
+            intent.putExtra("message", reconsentMessage);
+        }
         sendBroadcast(intent);
     }
 
@@ -749,6 +892,10 @@ public class ScreenCaptureService extends Service
         intent.putExtra("clients", hub != null ? hub.getClientCount() : 0);
         intent.putExtra("width", videoWidth);
         intent.putExtra("height", videoHeight);
+        // Every broadcast the activity's receiver reads must carry the live mode: the
+        // receiver defaults a missing "mirror" to true, and a fabricated true on a
+        // PUBLIC session used to send a contradictory ACTION_SET_MODE back here.
+        intent.putExtra("mirror", useMirrorFlag);
         sendBroadcast(intent);
     }
 

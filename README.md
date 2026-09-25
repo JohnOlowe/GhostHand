@@ -33,7 +33,7 @@ Package `damjay.control.ghosthand` · **minSdk 19 (Android 4.4)** · targetSdk 3
 ```bash
 git clone https://github.com/JohnOlowe/GhostHand.git
 cd GhostHand
-bash build.sh                 # setup + AndroidX + 79 unit tests + signed APK (~2.5 min cold)
+bash build.sh                 # setup + AndroidX + 83 unit tests + signed APK (~2.5 min cold)
 ```
 
 `build.sh` installs the toolchain into `toolchain/vendor` (JRE, Eclipse compiler, aapt2,
@@ -399,8 +399,16 @@ projection.createVirtualDisplay("GhostHand", w, h, densityDpi,
 ```
 
 * `AUTO_MIRROR` is what makes the system *distrust* secure windows (banking apps draw black).
-  The host UI can switch to `PUBLIC` at runtime - that is a property of the display, so only
-  the `VirtualDisplay` is recreated; the encoder keeps running.
+  The host UI can switch to `PUBLIC` at runtime - the flag is a property of the display, not
+  of the encoder, so the stream keeps running either way. Below Android 14 only the
+  `VirtualDisplay` is recreated. **Android 14+ grants exactly one capture per consent**: the
+  system marks the grant used the moment its first display exists
+  (`MediaProjectionManagerService$MediaProjection.isValid()` → `mVirtualDisplayId != -1`,
+  permanent - releasing the display does not reset it) and every later `createVirtualDisplay`
+  throws `SecurityException`. So on 14+ a mode change re-opens the system confirmation dialog
+  and `swapProjection()` puts the fresh grant under the same encoder and the same guest
+  sockets - and the rotation path never recreates the display at all, it `resize()`s the
+  surviving one and points it at the new encoder surface.
 * Sizing goes through `GhostProtocol.fitCaptureSize(w, h, maxSide)`: scale so the longest side
   matches the chosen preset, then round **down to a multiple of 16**. H.264 works in 16x16
   macroblocks, and an odd size gets padded and smears the right and bottom edges.
@@ -848,7 +856,7 @@ tested on a plain JVM - no device, no emulator:
 bash toolchain/test.sh app --source 8
 # JUnit version 4.13.2
 # ...............................................................................
-# OK (79 tests)
+# OK (83 tests)
 ```
 
 What is covered:
@@ -895,7 +903,7 @@ phones.
 |---|---|
 | Guest list is empty | mDNS blocked (AP isolation) - type the IP shown on the host instead. Both phones must be on the *same* network, and "guest WiFi" networks usually isolate clients from each other. |
 | "that does not look like an IP address" | the guest needs `192.168.x.x`, not a hostname. |
-| Black screen in a secure app | expected: `AUTO_MIRROR` is distrusted by the system for banking/DRM windows. Switch the host to `PUBLIC` mode. |
+| Black screen in a secure app | expected: `AUTO_MIRROR` is distrusted by the system for banking/DRM windows. Switch the host to `PUBLIC` mode. On Android 14+ the system asks you to confirm screen capture once more when the mode changes mid-session - that is the OS's one-capture-per-consent rule, not a malfunction. |
 | Picture freezes and then recovers | the decoder dropped a frame and is waiting for the next key frame (2 s). `dropped` in the guest's stats tells you it happened. |
 | `INSTALL_PARSE_FAILED_NO_CERTIFICATES` on an old phone | the APK has no v1 (JAR) signature, which is all Android 6.0 and older understand. `toolchain/lib.sh` enables it automatically when `min-api < 24`; a build made with a higher `--min-api` will not install there. |
 | `ClassNotFoundException` for one of your own activities at launch | the release build shrank away a class the manifest declares. The keep rules are generated from the manifest at dex time (`toolchain/manifest_keep.py`) and `verify_apk.py` fails a build missing any component - if you see this, something regenerated one without the other. Debug APK unaffected: it is never shrunk. |

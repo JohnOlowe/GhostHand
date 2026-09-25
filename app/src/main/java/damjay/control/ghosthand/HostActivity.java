@@ -91,6 +91,15 @@ public class HostActivity extends AppCompatActivity {
     private MaterialAutoCompleteTextView spnResolution;
     private TextInputLayout boxResolution;
     private MaterialSwitch swMirror;
+
+    /**
+     * Android 14 capture-mode change: the service answered with EXTRA_RECONSENT and
+     * the system dialog is (or was) up again. desiredMirror is the mode the user
+     * asked for - the switch shows the LIVE mode while we wait, because that is what
+     * is still capturing, so the answer must not be read back from it.
+     */
+    private boolean awaitingReconsent;
+    private boolean desiredMirror;
     private View dotTouch;
     private TextView txtTouchStatus;
     private MaterialButton btnTouchSettings;
@@ -107,8 +116,22 @@ public class HostActivity extends AppCompatActivity {
             registerForActivityResult(new ActivityResultContracts.StartActivityForResult(),
                     result -> {
                         Intent data = result.getData();
+                        boolean reconsent = awaitingReconsent;
+                        awaitingReconsent = false;
                         if (result.getResultCode() == RESULT_OK && data != null) {
-                            startCapture(result.getResultCode(), data);
+                            if (reconsent) {
+                                // Mid-session mode change on Android 14: the service is
+                                // still running, so skip the "starting fresh" UI updates
+                                // and hand it the mode the user asked for, not the switch
+                                // (the switch shows the still-live old mode).
+                                startCapture(result.getResultCode(), data, desiredMirror);
+                            } else {
+                                startCapture(result.getResultCode(), data);
+                            }
+                        } else if (reconsent) {
+                            // Nothing was pending on the service side - it never left the
+                            // live mode - so a "no" just leaves everything as it was.
+                            appendLog(getString(R.string.host_mode_unchanged));
                         } else {
                             showMessage(getString(R.string.host_permission_denied));
                             appendLog(getString(R.string.host_permission_denied));
@@ -283,6 +306,10 @@ public class HostActivity extends AppCompatActivity {
     private void onMirrorToggled(android.widget.CompoundButton button, boolean checked) {
         button.setText(checked ? R.string.host_mode_mirror : R.string.host_mode_public);
         if (ScreenCaptureService.isStreaming()) {
+            // Remembered because the service's EXTRA_RECONSENT broadcast will snap the
+            // switch back to the live mode; the answer to the system dialog must apply
+            // THIS value regardless of what the switch shows at that point.
+            desiredMirror = checked;
             Intent intent = new Intent(this, ScreenCaptureService.class);
             intent.setAction(ScreenCaptureService.ACTION_SET_MODE);
             intent.putExtra(ScreenCaptureService.EXTRA_MIRROR_FLAG, checked);
@@ -320,13 +347,19 @@ public class HostActivity extends AppCompatActivity {
     }
 
     private void startCapture(int resultCode, Intent data) {
+        startCapture(resultCode, data, swMirror.isChecked());
+    }
+
+    /** @param mirror mode this capture should use; may differ from the switch while a
+     *  mode-change consent was in flight (Android 14 re-consent flow). */
+    private void startCapture(int resultCode, Intent data, boolean mirror) {
         Intent intent = new Intent(this, ScreenCaptureService.class);
         intent.setAction(ScreenCaptureService.ACTION_START);
         intent.putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, resultCode);
         // The permission token is a Parcelable Intent; the service needs it verbatim.
         intent.putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, data);
         intent.putExtra(ScreenCaptureService.EXTRA_MAX_SIDE, selectedMaxSide());
-        intent.putExtra(ScreenCaptureService.EXTRA_MIRROR_FLAG, swMirror.isChecked());
+        intent.putExtra(ScreenCaptureService.EXTRA_MIRROR_FLAG, mirror);
 
         ContextCompat.startForegroundService(this, intent);
 
@@ -383,17 +416,33 @@ public class HostActivity extends AppCompatActivity {
                 txtStatusDetail.setText(width + "x" + height + " · " + clients + " guest(s)");
             }
 
+            // UI-only sync. Never call onMirrorToggled here: the service's own state
+            // is what we are copying, so echoing it back as a command can only be
+            // redundant - or, when a broadcast lacked the extra and defaulted mirror
+            // to true on a PUBLIC session, contradictory (it used to tell the service
+            // to recreate the virtual display out of nowhere).
             boolean mirror = intent.getBooleanExtra("mirror", true);
-            if (swMirror.isChecked() != mirror) {
-                // Detach first: setChecked() would otherwise fire the listener and
-                // send a redundant ACTION_SET_MODE back to the service.
-                swMirror.setOnCheckedChangeListener(null);
-                swMirror.setChecked(mirror);
-                swMirror.setOnCheckedChangeListener(HostActivity.this::onMirrorToggled);
-                onMirrorToggled(swMirror, mirror);
+            syncMirrorUi(mirror);
+            if (intent.getBooleanExtra(ScreenCaptureService.EXTRA_RECONSENT, false)
+                    && !awaitingReconsent) {
+                awaitingReconsent = true;
+                // The service keeps streaming on the live mode until the user decides;
+                // a refusal changes nothing because the service never left that mode.
+                requestProjection();
             }
         }
     };
+
+    /** Push the service's live mode into switch + label without firing the listener. */
+    private void syncMirrorUi(boolean mirror) {
+        if (swMirror.isChecked() == mirror) {
+            return;
+        }
+        swMirror.setOnCheckedChangeListener(null);
+        swMirror.setChecked(mirror);
+        swMirror.setText(mirror ? R.string.host_mode_mirror : R.string.host_mode_public);
+        swMirror.setOnCheckedChangeListener(HostActivity.this::onMirrorToggled);
+    }
 
     private void renderState(int state, String error) {
         boolean running = (state == ScreenCaptureService.STATE_RUNNING);

@@ -35,6 +35,7 @@
     <string name="host_guest_mode">Open Guest mode on this phone</string>
     <string name="host_guest_mode_note">Only useful for a loopback smoke test: you cannot watch this phone\'s own screen on it, because opening Guest mode hides the Host screen you are mirroring.</string>
     <string name="host_permission_denied">Screen capture permission denied</string>
+    <string name="host_mode_unchanged">Capture mode unchanged (no confirmation given)</string>
     <string name="host_notification_denied">Notification permission denied - the mirroring notification will be hidden, but the stream still works</string>
     <string name="host_stat_fps">fps</string>
     <string name="host_stat_bitrate">kbps</string>

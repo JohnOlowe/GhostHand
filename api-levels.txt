@@ -45,6 +45,8 @@ android/media/projection/MediaProjection                               21  host 
 android/media/projection/MediaProjection$Callback                      21  same
 android/media/projection/MediaProjectionManager                        21  same
 android/hardware/display/VirtualDisplay$Callback                       21  same (VirtualDisplay itself is API 19; its Callback is not)
+android/hardware/display/VirtualDisplay#resize                          21  ScreenCaptureService.reconfigureCapture: rotation/size change resizes the live display instead of recreating it (Android 14 allows one createVirtualDisplay per consent); host role only, same gates as MediaProjection
+android/hardware/display/VirtualDisplay#setSurface                      21  ScreenCaptureService.reconfigureCapture points the surviving display at the new encoder surface; host role only, same gates as MediaProjection
 android/media/MediaCodecInfo$EncoderCapabilities                       21  host encoder bitrate mode, host role only
 
 # --- foreground service typing -----------------------------------------------
