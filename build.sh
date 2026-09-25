@@ -50,8 +50,11 @@ MIN_API=19
 # min-api-19 build must fit in one dex. The release build is checked for exactly that.)
 DEBUG_MIN_API=21
 SOURCE=8            # 8 = compile against the real Android API surface (see RECIPE.md)
-VERSION_CODE=1
-VERSION_NAME=0.2.0-androidx
+# versionCode 2 fixes the launch crash of versionCode 1 (missing Kotlin runtime):
+# a new code lets the store/ adb update path be seen to work, and the same code is used
+# for both configurations, which is what keeps them installable over each other.
+VERSION_CODE=2
+VERSION_NAME=0.2.1-androidx
 MODE="release"      # release | debug | both
 PUBLISH=0
 RUN_TESTS=1

@@ -116,6 +116,22 @@ androidx_setup() {
   ANDROIDX_STATE="off (--no-androidx)"
   [ "${ANDROIDX_OFF:-0}" = "1" ] && return 0
   [ -s "$ANDROIDX_DIR/androidx.jar" ] && ANDROIDX_CLASSES="$ANDROIDX_DIR/androidx.jar"
+  # Kotlin's runtime is not optional here. Some of the harvested AndroidX libraries are
+  # compiled from Kotlin (fragment, activity, window, lifecycle-viewmodel), so their
+  # classes call kotlin.jvm.internal.Intrinsics on ordinary code paths - starting with
+  # AppCompatActivity's constructor. Gradle would add kotlin-stdlib as a transitive
+  # dependency; with no Gradle, it has to be appended next to androidx.jar.
+  #
+  # Getting this wrong is silent: R8 only *warns* about a missing class, the build goes
+  # green, and the app dies at launch with ClassNotFoundException. That is exactly what
+  # shipped in the first published build. verify_apk.py now fails an APK whose dex
+  # references androidX/com.google/kotlin types it does not itself define, so the next
+  # time this goes missing the build stops here instead.
+  if [ -n "$ANDROIDX_CLASSES" ] && [ -s "$GH_TOOLCHAIN/kotlin-stdlib.jar" ]; then
+    ANDROIDX_CLASSES="$ANDROIDX_CLASSES:$GH_TOOLCHAIN/kotlin-stdlib.jar"
+    [ -s "$GH_TOOLCHAIN/kotlin-annotations.jar" ] \
+      && ANDROIDX_CLASSES="$ANDROIDX_CLASSES:$GH_TOOLCHAIN/kotlin-annotations.jar"
+  fi
   if [ -d "$ANDROIDX_DIR/res" ]; then
     for z in "$ANDROIDX_DIR"/res/*.zip; do
       [ -s "$z" ] && ANDROIDX_ARGS+=(-R "$z")
@@ -262,18 +278,27 @@ dex() {
   local classes; classes=$(find "$CLASSES_DIR" -name '*.class')
   [ -n "$classes" ] || die "nothing to dex: $CLASSES_DIR is empty"
   # AndroidX classes are program input, not a library: they must land in the dex.
+  # ANDROIDX_CLASSES is a colon-joined *classpath* (what ECJ wants); the dexers take
+  # one path per argument, so it is split here rather than joined.
   local ax=()
-  [ -n "$ANDROIDX_CLASSES" ] && [ "${DEX_SKIP_ANDROIDX:-0}" != "1" ] && ax=("$ANDROIDX_CLASSES")
+  if [ -n "$ANDROIDX_CLASSES" ] && [ "${DEX_SKIP_ANDROIDX:-0}" != "1" ]; then
+    IFS=':' read -r -a ax <<< "$ANDROIDX_CLASSES"
+  fi
+  # Library inputs: resolvable, never emitted. The Kotlin annotations live here rather
+  # than in the dex - they are CLASS-retention metadata, not runtime classes.
+  local libs=(--lib "$ANDROID_JAR")
+  [ -s "$GH_TOOLCHAIN/kotlin-annotations.jar" ] \
+    && libs+=(--lib "$GH_TOOLCHAIN/kotlin-annotations.jar")
   if [ "${RELEASE:-0}" = "1" ]; then
     local pgconf="$PROJ/proguard.pro"
     local extra=()
     [ -f "$pgconf" ] && extra=(--pg-conf "$pgconf")
     "$JAVA" -cp "$D8_JAR" com.android.tools.r8.R8 --release --dex \
-      --min-api "$min_api" --lib "$ANDROID_JAR" "${extra[@]}" "$@" \
+      --min-api "$min_api" "${libs[@]}" "${extra[@]}" "$@" \
       --output "$out" $classes "${ax[@]}" || die "R8 failed"
   else
     "$JAVA" -cp "$D8_JAR" com.android.tools.r8.D8 \
-      --min-api "$min_api" --lib "$ANDROID_JAR" "$@" \
+      --min-api "$min_api" "${libs[@]}" "$@" \
       --output "$out" $classes "${ax[@]}" || die "D8 failed (Java bytecode the dexer rejects?)"
   fi
 }

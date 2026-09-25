@@ -201,6 +201,59 @@ fi
 ok "android-$REF_API.jar ready ($(du -h "$VENDOR/android-$REF_API.jar" | cut -f1))"
 
 # ---------------------------------------------------------------------------
+say "6c/7 Kotlin runtime  (npm: kotlin-compiler, for the AndroidX libraries)"
+
+# This one is not a nicety. Several of the AndroidX libraries we vendor are compiled
+# from Kotlin by Google - fragment, activity, window, lifecycle-viewmodel - so their
+# classes call kotlin.jvm.internal.Intrinsics from ordinary code paths, including
+# AppCompatActivity's constructor. Gradle pulls kotlin-stdlib in automatically as a
+# transitive dependency; this toolchain has no Gradle, so the runtime has to be taken
+# from somewhere explicitly. Without it every launch dies with
+# ClassNotFoundException: kotlin.jvm.internal.Intrinsics - and, worse, the *build*
+# still succeeds, because R8 only warns about a missing class.
+#
+# There is no stdlib-only artifact on PyPI or npm, so it comes out of the official
+# Kotlin distribution published to npm as `kotlin-compiler`: the distribution ships
+# lib/kotlin-stdlib.jar next to the compiler, and we extract exactly that one file
+# (1.7 MB out of an 87 MB tarball, which is deleted straight after). The version is
+# pinned to the 1.9 line on purpose: it is the generation the vendored AndroidX
+# (appcompat 1.6.1, material 1.10.0, activity 1.8.0) was built against, and the 2.x
+# stdlib raises its own Android floor.
+KOTLIN_VERSION="${KOTLIN_VERSION:-1.9.25}"
+if [ ! -s "$VENDOR/kotlin-stdlib.jar" ] || [ ! -s "$VENDOR/kotlin-annotations.jar" ]; then
+  url=$(npm_url "kotlin-compiler" "$KOTLIN_VERSION")
+  get "$url" "$TMP/kotlin-compiler.tgz"
+  tar xzf "$TMP/kotlin-compiler.tgz" -C "$TMP" \
+      package/lib/kotlin-stdlib.jar package/lib/annotations-13.0.jar \
+    || die "the kotlin-compiler tarball has no lib/kotlin-stdlib.jar"
+  cp "$TMP/package/lib/kotlin-stdlib.jar" "$VENDOR/kotlin-stdlib.jar"
+  # The stdlib references org.jetbrains.annotations (@NotNull/@Nullable) in its own
+  # signatures. Those annotations have CLASS retention: tools read them, a device never
+  # loads them, so this jar is a *library* input for the dexers and does not ship.
+  # Vendoring it beats another -dontwarn, which is exactly what hid the missing runtime
+  # class in the published build.
+  cp "$TMP/package/lib/annotations-13.0.jar" "$VENDOR/kotlin-annotations.jar"
+  rm -rf "$TMP/package" "$TMP/kotlin-compiler.tgz"
+fi
+python3 - "$VENDOR/kotlin-stdlib.jar" "$VENDOR/kotlin-annotations.jar" <<'CHK' || die "the Kotlin jars look wrong"
+import sys, zipfile
+stdlib, annotations = sys.argv[1], sys.argv[2]
+names = {path: set(zipfile.ZipFile(path).namelist()) for path in (stdlib, annotations)}
+want = {
+    "kotlin/jvm/internal/Intrinsics.class": stdlib,
+    "kotlin/Unit.class": stdlib,
+    "org/jetbrains/annotations/NotNull.class": annotations,
+}
+bad = [n for n, p in want.items() if n not in names[p]]
+for path in (stdlib, annotations):
+    print("    %-22s %d classes" % (path.rsplit("/", 1)[-1] + ":", len(names[path])))
+if bad:
+    print("    MISSING: %s" % bad)
+sys.exit(1 if bad else 0)
+CHK
+ok "kotlin-stdlib.jar $KOTLIN_VERSION + annotations ready ($(du -h "$VENDOR/kotlin-stdlib.jar" | cut -f1))"
+
+# ---------------------------------------------------------------------------
 say "7/9 language-level classpath (android.jar minus the packages the JRE owns)"
 # ECJ cannot be handed an alternate *bootclasspath* above source level 8: the
 # module system refuses it ("package java.util is accessible from more than one

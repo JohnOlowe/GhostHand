@@ -330,6 +330,35 @@ contains.
 
 ---
 
+### The one runtime dependency you cannot skip: Kotlin
+
+Harvesting the AARs is only half of it. Google compiles a large part of AndroidX from
+Kotlin, so `androidx.fragment.app.FragmentActivity` - the superclass of every
+`AppCompatActivity` - calls `kotlin.jvm.internal.Intrinsics` in its constructor. An APK
+built from these AARs with no Kotlin runtime therefore dies at launch with
+`ClassNotFoundException: kotlin.jvm.internal.Intrinsics`, and *the build does not fail*:
+R8 treats a missing class as a warning unless you ask it not to, and a `-dontwarn` line
+will silence it for good measure.
+
+There is no stdlib-only package on PyPI (checked: `kotlin-stdlib`, `kotlin-jvm` -> 404) and
+none on npm under that name (the package called `kotlin` is the Kotlin/JS stdlib - `kotlin.js`
+and `.kjsm` metadata, useless for an APK). What does exist is `kotlin-compiler` on npm: the
+official Kotlin distribution, which ships `lib/kotlin-stdlib.jar` (1.7 MB) and
+`lib/annotations-13.0.jar` (20 KB) next to the compiler. `toolchain/setup.sh` pulls the 87 MB
+tarball once, extracts those two files, deletes the tarball, and verifies the jars contain
+`kotlin/jvm/internal/Intrinsics.class` and `org/jetbrains/annotations/NotNull.class`.
+
+Version 1.9.25 is pinned deliberately: it matches the AndroidX generation vendored here
+(appcompat 1.6.1 / material 1.10.0 / activity 1.8.0), and the 2.x stdlib raises its own
+minimum Android level. The stdlib goes on the compile classpath *and* into the dexers as a
+program input; the annotations jar goes in as a `--lib` input only - `@NotNull`/`@Nullable`
+are CLASS-retention metadata that a device never loads.
+
+The lesson worth keeping: a `-dontwarn` on a package you do not ship is a claim that the
+code never runs, and it is a claim nobody checks. `packaging-allowlist.txt` and the
+self-containment check in `verify_apk.py` replace that claim with an audit of the finished
+APK.
+
 ## Appendix: end-to-end, copy-pasteable
 
 ```bash

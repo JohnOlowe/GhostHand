@@ -6,9 +6,17 @@ artifact the project ever resolved, including duplicates across versions (two
 `transition` versions), Kotlin-only variants (`core-ktx`), test infrastructure
 (`espresso-core`, `runner`) and unrelated tooling (`gradle-8.12.2.jar`).
 
-So the selection is explicit rather than clever: a WANT list of the artifacts a
-normal AppCompat/Material app needs, the highest version of each, plus the plain
-jars (annotation, collection, arch core, ...). Everything else is ignored.
+So the selection is explicit rather than clever: a WANT list of the artifacts *this*
+app needs, the highest version of each, plus the plain jars (annotation, collection,
+arch core, ...). Everything else is ignored.
+
+The list is deliberately short. Every library that is not in it is a library whose
+references cannot dangle, whose resources cannot leak into the APK and whose classes
+cannot be loaded by accident - and the APK is smaller for it. navigation-* and
+slidingpanelayout/window were removed on evidence, not taste: nothing outside
+navigation itself referenced navigation, nothing outside navigation referenced
+slidingpanelayout, and nothing outside slidingpanelayout referenced window (checked
+with a scan of the merged jar in the PR/commit notes).
 
 Usage:
     python3 select_androidx.py LISTING_FILE OUT_FILE
@@ -45,19 +53,18 @@ WANT_AARS = [
     "lifecycle-process",
     "lifecycle-runtime",
     "lifecycle-viewmodel",
+    # Kept even though this app has no ViewModels: ComponentActivity's *constructor*
+    # calls SavedStateHandleSupport.enableSavedStateHandles(), so R8 fails the build
+    # without it. That failure is how this line was written - which is the point of
+    # failing on a missing class instead of warning about it.
     "lifecycle-viewmodel-savedstate",
     "loader",
     "localbroadcastmanager",
     "material",
-    "navigation-common",
-    "navigation-fragment",
-    "navigation-runtime",
-    "navigation-ui",
     "print",
     "profileinstaller",
     "recyclerview",
     "savedstate",
-    "slidingpanelayout",
     "startup-runtime",
     "tracing",
     "transition",
@@ -66,7 +73,6 @@ WANT_AARS = [
     "versionedparcelable",
     "viewpager",
     "viewpager2",
-    "window",
 ]
 
 # Plain jars: androidx.annotation / collection / arch core / constraintlayout

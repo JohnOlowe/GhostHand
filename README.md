@@ -42,7 +42,7 @@ D8/R8, apksigner) and harvests AndroidX into `toolchain/vendor/androidx`, then p
 Want both configurations - the shrunk one and the unobfuscated one - in one go?
 
 ```bash
-bash build.sh --both          # + app/build/app-debug.apk (5.5 MB, debuggable, Android 5.0+)
+bash build.sh --both          # + app/build/app-debug.apk (5.9 MB, debuggable, Android 5.0+)
 
 adb install -r app/build/app.apk     # on BOTH phones
 ```
@@ -72,7 +72,7 @@ parentless commit**:
 | | file | runs on | what it is |
 |---|---|---|---|
 | **2.5 MB** | `GhostHand.apk` | **Android 4.4+** | the **release** build - R8 shrunk, renamed and inlined, one dex file. What to install. |
-| **5.5 MB** | `GhostHand-debug.apk` | Android 5.0+ | the **debug** build - nothing shrunk or renamed, genuinely `android:debuggable`, six dex files. |
+| **5.9 MB** | `GhostHand-debug.apk` | Android 5.0+ | the **debug** build - nothing shrunk or renamed, genuinely `android:debuggable`, six dex files. |
 
 Both are the *same app*: same package, same versionCode, same key, same signature scheme -
 so **either one installs straight over the other, in either order**, keeping your data.
@@ -201,7 +201,7 @@ resources *before* aapt2 ever runs.
 
 ### R8 and the keep rules nobody generated for us
 
-The release build is shrunk and optimised by R8 (5.5 MB debug -> **2.5 MB** release, and six
+The release build is shrunk and optimised by R8 (5.9 MB debug -> **2.5 MB** release, and six
 dex files down to one). With
 AGP, the "keep the manifest components" rules are generated automatically; here there is no
 AGP, so `app/proguard.pro` carries them by hand. Without those few lines R8 would rename or
@@ -563,8 +563,8 @@ looks like a corrupt download when you hit it.
 
 ### The checks that make this trustworthy
 
-There is no emulator here, so "works on API 19" had to become something checkable. Two
-tools do it, and both are wired into `build.sh`.
+There is no emulator here, so "works on API 19" had to become something checkable. Three
+tools do it, and all three are wired into `build.sh`.
 
 **`check_api.py`** reads the constant pool of every compiled class, keeps the references
 into `android.*` and `java.*`, and asks a real **API 19 `android.jar`** whether each one
@@ -592,6 +592,26 @@ count against the declared minSdk - and it understands that aapt2 may *version-q
 resource behind your back (it split the accessibility config into `res/xml/` and
 `res/xml-v22/` the moment minSdk dropped below 22, keeping `canPerformGestures` only in the
 copy a modern device loads, which is correct and looked like a bug for ten minutes).
+
+It also proves the APK is **self-contained**. Every type the dex names under `androidx.*`,
+`com.google.*`, `kotlin.*`, `kotlinx.*` or our own package must be defined *in that APK*,
+or listed in `packaging-allowlist.txt` with a reason - and an entry that stops suppressing
+something fails the build, exactly like a stale `api-levels.txt` entry. That check exists
+because the first published build shipped without it and died on the first launch:
+
+| | |
+|---|---|
+| **the bug** | `AppCompatActivity`'s constructor calls `FragmentActivity`'s, which calls `kotlin.jvm.internal.Intrinsics` - Google compiles much of AndroidX from Kotlin, so the Kotlin runtime is a real dependency. The APK did not contain it. |
+| **why the build was green** | `app/proguard.pro` had `-dontwarn kotlin.**` with a comment saying those references were "never called on the paths we use". They were on the very first path. R8 reported the missing class; the rule threw the report away. |
+| **the fix** | the real `kotlin-stdlib.jar` (1.9.25, the generation the vendored AndroidX was built with) is now vendored by `toolchain/setup.sh` and linked like any other dependency; the `-dontwarn` line is gone, and the four remaining exception families in `proguard.pro` name the exact method that references each one. |
+| **the guard** | the self-containment check above. Pointed at that broken APK it names 48 missing types, `kotlin/jvm/internal/Intrinsics` among them. |
+
+The same audit removed a whole category of risk: `androidx.navigation` (four artifacts),
+`androidx.slidingpanelayout` and `androidx.window` were in the harvest but referenced by
+nothing in this app - navigation by nothing at all, slidingpanelayout only by navigation,
+window only by slidingpanelayout. Dropping them took the number of dangling references from
+19 to 2 in the release build and shrank the debug APK by ~1 MB. The two that remain are
+declared, with the method that references each.
 
 ```
 $ bash build.sh --release
@@ -821,6 +841,7 @@ build.sh                    one command: setup -> AndroidX -> tests -> signed AP
 verify_apk.py               assert R8 kept the classes/calls/resources the app needs
 check_api.py                assert every framework call exists on minSdk (API 19)
 api-levels.txt              the declared exemptions, each with a level and a reason
+packaging-allowlist.txt     classes the APK references and does not contain, with reasons
 publish-apk.sh              push the APK to the single-commit `apk` branch
 RECIPE.md                   how the SDK-less toolchain was assembled, and what fails
 sample/                     toy framework-only project used as a toolchain smoke test

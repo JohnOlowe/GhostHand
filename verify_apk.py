@@ -45,6 +45,7 @@ platform it claims to support, 2 = usage/IO error.
 
 import fnmatch
 import os
+import struct
 import subprocess
 import sys
 import zipfile
@@ -152,6 +153,176 @@ def declared_min_sdk(apk):
     return None
 
 
+# ---------------------------------------------------------------------------
+# dex self-containment
+# ---------------------------------------------------------------------------
+#
+# The bug this exists for: the first published APK called
+# kotlin.jvm.internal.Intrinsics from AppCompatActivity's constructor and did not
+# contain that class. R8 had said so - it warns about missing classes - but a
+# `-dontwarn kotlin.**` in proguard.pro threw the warning away, the build stayed
+# green, and the app died on launch with ClassNotFoundException on a real phone.
+#
+# R8 now fails on a missing class, and its exceptions are declared one by one in
+# proguard.pro. But R8 only reports what it can reach; this check reads the finished
+# dex and asks a blunter question: *every* type the APK references under a package
+# that must ship inside it - androidx.*, com.google.*, kotlin.*, kotlinx.*,
+# org.jetbrains.* and our own damjay.control.ghosthand.* - is it defined in the APK?
+# If not, it has to be listed in packaging-allowlist.txt with a reason.
+#
+# Those are exactly the packages that are neither provided by the platform (android.*,
+# java.*) nor optional-at-runtime by design - so a type from one of them that the dex
+# names and the APK does not contain is a NoClassDefFoundError waiting for the code
+# path that touches it.
+APP_SPACE_PREFIXES = ("androidx/", "com/google/", "kotlin/", "kotlinx/",
+                      "org/jetbrains/", "damjay/control/ghosthand/")
+
+
+def dex_types(data):
+    """(defined, referenced) type descriptors in one classesN.dex.
+
+    A dex keeps every type it touches in one table (type_ids), so "referenced" is just
+    that table: it covers method calls, field accesses, casts, instance creation,
+    annotations and superclasses alike. "Defined" is the class_defs table - the types
+    that actually live in this dex. No disassembly needed.
+    """
+    if data[:4] != b"dex\n":
+        return set(), set()
+    if struct.unpack_from("<I", data, 0x28)[0] != 0x12345678:
+        return set(), set()          # reverse-endian dex: never produced here
+    string_ids_size, string_ids_off = struct.unpack_from("<II", data, 0x38)
+    type_ids_size, type_ids_off = struct.unpack_from("<II", data, 0x40)
+    class_defs_size, class_defs_off = struct.unpack_from("<II", data, 0x60)
+
+    def string_at(index):
+        (offset,) = struct.unpack_from("<I", data, string_ids_off + 4 * index)
+        # MUTF-8 length prefix, then the bytes up to NUL. Only ASCII descriptors
+        # matter here, so a lenient decode is safe.
+        length, pos = 0, offset
+        while data[pos] & 0x80:
+            length = (length << 7) | (data[pos] & 0x7F)
+            pos += 1
+        length = (length << 7) | data[pos]
+        return data[pos + 1:pos + 1 + length].decode("utf-8", "replace")
+
+    type_of = lambda i: string_at(struct.unpack_from("<I", data, type_ids_off + 4 * i)[0])
+    referenced = {type_of(i) for i in range(type_ids_size)}
+    defined = {type_of(struct.unpack_from("<I", data, class_defs_off + 32 * i)[0])
+               for i in range(class_defs_size)}
+    return defined, referenced
+
+
+SCOPES = ("both", "release", "debug")
+
+
+def read_allowlist(path):
+    """{descriptor: (scope, reason)} from `<descriptor> [scope] <reason>` lines.
+
+    The scope column is optional and defaults to `both`. `debug` marks an entry that is
+    only expected in the unshrunk build, where R8 has not pruned the reference away yet;
+    it is still checked for staleness there.
+    """
+    entries = {}
+    if not os.path.exists(path):
+        return entries
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split(None, 2)
+            if len(parts) > 1 and parts[1] in SCOPES:
+                entries[parts[0]] = (parts[1], parts[2] if len(parts) > 2 else "")
+            else:
+                entries[parts[0]] = ("both", line[len(parts[0]):].strip())
+    return entries
+
+
+def declared_debuggable(apk):
+    """True/False from the manifest, or None when aapt2 cannot tell us."""
+    aapt2 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "toolchain", "vendor", "aapt2")
+    if not os.path.exists(aapt2):
+        return None
+    try:
+        out = subprocess.check_output([aapt2, "dump", "badging", apk],
+                                      stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    text = out.decode("utf-8", "replace")
+    if "application-debuggable" in text:
+        return True
+    return False if "application:" in text else None
+
+
+def matches(type_name, entry):
+    """`androidx/window/extensions/**` matches a subtree, a bare name matches exactly."""
+    if entry.endswith("**"):
+        return type_name.startswith(entry[:-2])
+    return type_name == entry
+
+
+def check_self_contained(dexes, blobs, allowlist_path, kind):
+    """Every app-space type the dex references must be in the APK or declared absent.
+
+    `kind` is "release", "debug" or None (unknown): it decides which allowlist entries
+    are expected in this artifact.
+    """
+    defined, referenced = set(), set()
+    for name in dexes:
+        d, r = dex_types(blobs[name])
+        defined |= {t[1:-1] for t in d}       # Lfoo/Bar; -> foo/Bar, to match below
+        referenced |= r
+
+    declared = read_allowlist(allowlist_path)
+    # Entries that apply here. With an unknown configuration every entry is a candidate
+    # (coverage is the point) but staleness cannot be judged, so it is not.
+    allow = {k: reason for k, (scope, reason) in declared.items()
+             if kind is None or scope in ("both", kind)}
+    used = set()
+    missing = []
+    for type_name in referenced:
+        if not type_name.startswith("L"):
+            continue
+        name = type_name[1:-1]                      # Lfoo/Bar; -> foo/Bar
+        if not name.startswith(APP_SPACE_PREFIXES):
+            continue
+        if name in defined:
+            continue
+        hits = [e for e in allow if matches(name, e)]
+        if hits:
+            used.update(hits)
+            continue
+        missing.append(name)
+
+    problems = 0
+    if missing:
+        problems += fail("%d type(s) the dex references are not in the APK and are not "
+                         "declared absent:" % len(missing))
+        for name in sorted(missing)[:15]:
+            print("      %s" % name)
+        if len(missing) > 15:
+            print("      ... and %d more" % (len(missing) - 15))
+        print("      (a missing class is a NoClassDefFoundError on the code path that "
+              "touches it; add the library, or declare it in packaging-allowlist.txt "
+              "with a reason)")
+
+    # An exemption that no longer suppresses anything is how the last one hid a real
+    # missing class: it stayed while the code around it changed.
+    stale = sorted(set(allow) - used) if kind is not None else []
+    if stale:
+        problems += fail("%d allowlist entr(y/ies) in packaging-allowlist.txt no longer "
+                         "suppress anything - delete them:" % len(stale))
+        for entry in stale[:10]:
+            print("      %s" % entry)
+
+    if not problems:
+        info("%d types defined, %d referenced; every app-space reference is present%s"
+             % (len(defined), len(referenced),
+                "" if not allow else " (%d declared absent)" % len(allow)))
+    return problems
+
+
 def main(argv):
     apk = argv[1] if len(argv) > 1 else "app/build/app.apk"
     try:
@@ -207,6 +378,15 @@ def main(argv):
                 "loadable on any supported device" if len(dexes) == 1
                 else "needs native multidex (API 21+), which this build declares"))
 
+    # ------------------------------------------------- dex self-containment
+    blobs = {name: archive.read(name) for name in dexes}
+    debuggable = declared_debuggable(apk)
+    problems += check_self_contained(
+        dexes, blobs,
+        os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "packaging-allowlist.txt"),
+        None if debuggable is None else ("debug" if debuggable else "release"))
+
     for pattern, needle in REQUIRED_RESOURCE_STRINGS:
         entries = [n for n in names if fnmatch.fnmatch(n, pattern)]
         if not entries:
@@ -232,7 +412,7 @@ def main(argv):
         return 1
 
     print("\033[32m    ok\033[0m  APK VERIFY PASSED  (%d classes, %d call strings, "
-          "%d resources present)"
+          "%d resources present, dex self-contained)"
           % (len(REQUIRED_CLASSES), len(REQUIRED_STRINGS),
              len(REQUIRED_RESOURCE_STRINGS)))
     return 0

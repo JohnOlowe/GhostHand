@@ -80,6 +80,15 @@ manifest's own `minSdkVersion` - because Dalvik loads one dex file and a `minSdk
 with a second one is broken on exactly the phones it claims to support. It also understands
 that aapt2 version-qualifies a resource when a newer attribute is involved.
 
+`packaging-allowlist.txt` (repo root) is about the *finished APK*: every type the dex
+names under `androidx.*`, `com.google.*`, `kotlin.*`, `kotlinx.*` or the app's own package
+must be defined in that APK or declared there with a reason. This is the check that
+catches a library compiled against something the build never linked - the failure mode
+that shipped once already, as a `ClassNotFoundException` on launch (`-dontwarn kotlin.**`
+had been hiding R8's report that the Kotlin runtime was missing). Entries are scoped
+`both`/`release`/`debug` so an entry needed only by the unshrunk build is not reported
+stale when the release one is verified.
+
 `toolchain/aar_floor.py` is about the floor the *libraries* ask for: it reads each vendored
 AAR's own `minSdkVersion` and fails the build if one needs a newer platform than the app
 claims. Gradle would have caught this while merging manifests; here the link step sees only
@@ -94,6 +103,31 @@ the lambdas were desugared (`invoke-custom` must not survive below API 26).
 
 Both are run by the root `build.sh`, after the APK is signed and before anything can be
 published.
+
+## The Kotlin runtime, and why a Java-only app has one
+
+`toolchain/setup.sh` step 6c vendors `kotlin-stdlib.jar` and `kotlin-annotations.jar` from
+the official Kotlin distribution on npm (`kotlin-compiler`, version pinned to 1.9.25 - the
+generation the vendored AndroidX was built against; the 2.x stdlib raises its own Android
+floor). The app's own source is 100% Java and stays that way, but Google compiles much of
+AndroidX from Kotlin, so classes we call - `AppCompatActivity` and everything under it -
+call `kotlin.jvm.internal.Intrinsics` on ordinary paths. Gradle adds the stdlib as a
+transitive dependency; here it has to be appended to the classpath by hand in
+`toolchain/lib.sh`, and the annotations jar goes in as a *library* input to the dexers
+(CLASS-retention metadata, never loaded on a device, so it does not ship).
+
+Without it the build still succeeded - R8 only reports a missing class - and the APK died
+at launch on a real phone. That is what the packaging check above now makes impossible.
+
+## Which AndroidX artifacts to harvest
+
+`toolchain/select_androidx.py` holds an explicit WANT list, and shorter is better: an
+artifact that is not there cannot contribute dangling references, cannot leak resources
+into the APK, and cannot be loaded by accident. `androidx.navigation` was dropped because
+nothing outside navigation referenced it; `slidingpanelayout` and `window` followed,
+because only navigation referenced the first and only slidingpanelayout referenced the
+second. `lifecycle-viewmodel-savedstate` stayed, because R8 fails the build without it:
+`ComponentActivity`'s constructor calls `SavedStateHandleSupport.enableSavedStateHandles()`.
 
 ## AndroidX (optional, automatic once installed)
 
