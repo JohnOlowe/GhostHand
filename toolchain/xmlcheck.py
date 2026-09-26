@@ -29,11 +29,25 @@ import xml.etree.ElementTree as ET
 ANDROID_NS = "http://schemas.android.com/apk/res/android"
 A = "{%s}" % ANDROID_NS
 REF_RE = re.compile(r"@(\+?)([A-Za-z_][A-Za-z0-9_]*)/([A-Za-z0-9_.]+)")
-# values/<name>.xml -> resource type is the tag name, e.g. <string>, <color>
-VALUE_DIR_RE = re.compile(r"^values(-[A-Za-z]{2,3}(-r[A-Z]{2})?)?$")
+# values/<name>.xml -> resource type is the tag name, e.g. <string>, <color>.
+# Any qualifier is allowed: values-night, values-land, values-sw600dp,
+# values-b+sr+Latn ... Listing them (values-<lang> only) means a resource defined
+# only in values-night looks undefined, which is a false error on a perfectly
+# normal layout - found by testing the linter against a light/dark project.
+VALUE_DIR_RE = re.compile(r"^values(-.+)?$")
 COMPONENT_TAGS = ("activity", "activity-alias", "service", "receiver", "provider")
-FILE_RES_TYPES = ("drawable", "layout", "mipmap", "anim", "menu", "xml",
+FILE_RES_TYPES = ("drawable", "layout", "mipmap", "anim", "animator", "menu", "xml",
                   "raw", "color", "font", "navigation", "transition", "values")
+# "<type>" or "<type>-<qualifier>-<qualifier>": drawable-v24, mipmap-hdpi,
+# layout-land-sw600dp, drawable-en-xhdpi. Only the first segment is the type.
+RES_DIR_RE = re.compile(r"^([a-z]+)(?:-.+)?$")
+# Non-XML files define resources too: ic_launcher.webp in mipmap-hdpi satisfies
+# @mipmap/ic_launcher exactly as a drawable XML does.
+BINARY_RES_EXTS = (".9.png", ".png", ".webp", ".jpg", ".jpeg", ".gif",
+                   ".ttf", ".otf", ".mp3", ".wav", ".ogg", ".mp4", ".webm")
+# values tags whose resource type is not the tag name.
+VALUE_TAG_ALIASES = {"string-array": "array", "integer-array": "array",
+                     "array": "array", "declare-styleable": "styleable"}
 
 
 class Problem(object):
@@ -87,11 +101,17 @@ def _scan_res_dir(res_dir, found, override=True):
     for dirpath, _dirs, files in os.walk(res_dir):
         rel = os.path.relpath(dirpath, res_dir)
         leaf = rel.split(os.sep)[0]
+        if leaf == ".":
+            continue
+        m = RES_DIR_RE.match(leaf)
+        if not m:
+            continue
+        is_values = VALUE_DIR_RE.match(leaf) is not None
         for name in sorted(files):
-            if not name.endswith(".xml"):
-                continue
             path = os.path.join(dirpath, name)
-            if VALUE_DIR_RE.match(leaf):
+            if is_values:
+                if not name.endswith(".xml"):
+                    continue
                 tree = ET.parse(path) if _wellformed(path) else None
                 if tree is None:
                     continue
@@ -99,16 +119,39 @@ def _scan_res_dir(res_dir, found, override=True):
                     if not isinstance(child.tag, str):
                         continue
                     resname = child.get(A + "name") or child.get("name")
-                    if resname:
-                        # <item type="string" name="x">
-                        rtype = child.get("type") if child.tag in ("item", "public") else child.tag
-                        if rtype and rtype not in ("public", "overlayable", "macro", "staging-public-group"):
-                            _add(found, rtype, resname, path, override)
+                    if not resname:
+                        continue
+                    # <item type="string" name="x"> carries its type explicitly.
+                    if child.tag in ("item", "public"):
+                        rtype = child.get("type")
+                    else:
+                        rtype = VALUE_TAG_ALIASES.get(child.tag, child.tag)
+                    if rtype and rtype not in ("public", "overlayable", "macro",
+                                               "staging-public-group", "resources"):
+                        _add(found, rtype, resname, path, override)
+                continue
+            # File-based resources: the directory's first segment is the type and
+            # the file name minus its extension is the resource name.
+            typ = m.group(1)
+            if typ not in FILE_RES_TYPES:
+                continue
+            if name.endswith(".xml"):
+                base = name[:-4]
             else:
-                typ, base = leaf, name[:-4]
-                if leaf in FILE_RES_TYPES:
-                    _add(found, typ, base, path, override)
+                base = _strip_binary_ext(name)
+                if base is None:
+                    continue
+            _add(found, typ, base, path, override)
     return found
+
+
+def _strip_binary_ext(name):
+    """ic_launcher.webp -> ic_launcher; None if this is not a resource file."""
+    lowered = name.lower()
+    for ext in BINARY_RES_EXTS:
+        if lowered.endswith(ext):
+            return name[: -len(ext)]
+    return None
 
 
 def _add(found, rtype, name, path, override):
