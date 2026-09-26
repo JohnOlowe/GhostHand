@@ -1,0 +1,20 @@
+# packaging-allowlist.txt -- types the dex names that the APK does not define.
+#
+# Read by toolchain/verify_apk.py. Everything the dex names under androidx.*,
+# com.google.*, kotlin.*, kotlinx.* or org.jetbrains.* has to be defined in the
+# APK, because those packages are not provided by the platform. When a reference
+# is genuinely optional (a code path this app never reaches), it goes here with a
+# reason - visible, scoped, and checked: an entry that stops suppressing anything
+# fails the build, so this file cannot rot the way a -dontwarn line did.
+#
+# Grammar:  <class or prefix>  [both|release|debug]  <reason>
+#
+# (androidx/window/** was declared here while the vendored set still contained
+#  androidx.window: appcompat's ComponentActivity probes the WindowManager
+#  extension API, which only exists on devices that have it installed. Dropping
+#  that artifact from the harvest made the entry stale, and verify_apk.py failed
+#  the build until it was deleted - which is the point of the staleness rule:
+#  an entry cannot outlive the reference it was written for.)
+# kotlinx.coroutines: shipped inside androidx.lifecycle's PausingDispatcher as an
+# optional dispatcher, only reached by code that opts into coroutines.
+kotlinx/coroutines/**                   both  optional lifecycle coroutine dispatcher; this app never uses coroutines

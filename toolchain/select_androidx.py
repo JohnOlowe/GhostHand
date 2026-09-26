@@ -10,6 +10,15 @@ So the selection is explicit rather than clever: a WANT list of the artifacts a
 normal AppCompat/Material app needs, the highest version of each, plus the plain
 jars (annotation, collection, arch core, ...). Everything else is ignored.
 
+Shorter is better: an artifact that is not here cannot contribute dangling
+references, cannot leak resources into the APK and cannot be loaded by accident.
+navigation-* was dropped because nothing outside navigation referenced it, and
+slidingpanelayout/window followed (only navigation referenced slidingpanelayout,
+only slidingpanelayout referenced window) - measured by scanning the merged jar
+for references from outside each package. lifecycle-viewmodel-savedstate stays
+even for an app with no ViewModels: ComponentActivity's constructor calls
+SavedStateHandleSupport.enableSavedStateHandles(), and R8 fails without it.
+
 Usage:
     python3 select_androidx.py LISTING_FILE OUT_FILE
 where LISTING_FILE is one path per line (`git ls-tree --name-only HEAD`).
@@ -29,6 +38,12 @@ WANT_AARS = [
     "constraintlayout",
     "coordinatorlayout",
     "core",
+    # The -ktx artifacts are Kotlin top-level-function facades (SparseArrayKt,
+    # BundleKt, FragmentViewModelLazyKt, ...). AndroidX's own Java-visible
+    # classes reference them, so without them the dex names types the APK does
+    # not define - verify_apk.py found exactly those three. Named separately from
+    # the plain artifacts because they are separate downloads, not extras.
+    "core-ktx",
     "core-runtime",
     "cursoradapter",
     "customview",
@@ -38,6 +53,7 @@ WANT_AARS = [
     "emoji2",
     "emoji2-views-helper",
     "fragment",
+    "fragment-ktx",
     "interpolator",
     "legacy-support-core-utils",
     "lifecycle-livedata",
@@ -49,15 +65,10 @@ WANT_AARS = [
     "loader",
     "localbroadcastmanager",
     "material",
-    "navigation-common",
-    "navigation-fragment",
-    "navigation-runtime",
-    "navigation-ui",
     "print",
     "profileinstaller",
     "recyclerview",
     "savedstate",
-    "slidingpanelayout",
     "startup-runtime",
     "tracing",
     "transition",
@@ -66,7 +77,6 @@ WANT_AARS = [
     "versionedparcelable",
     "viewpager",
     "viewpager2",
-    "window",
 ]
 
 # Plain jars: androidx.annotation / collection / arch core / constraintlayout
@@ -75,6 +85,7 @@ WANT_AARS = [
 WANT_JARS = [
     "annotation-jvm",
     "collection",
+    "collection-ktx",
     "concurrent-futures",
     "constraintlayout-core",
     "core-common",

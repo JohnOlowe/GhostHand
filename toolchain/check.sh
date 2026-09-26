@@ -35,7 +35,6 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$PROJ_ARG" ] || die "usage: check.sh PROJECT_DIR [options]"
-[ -n "$MIN_API" ] || MIN_API=24
 androidx_setup
 # Fast loop: dex only the project's own classes. --full-dex also dexes the
 # AndroidX jar (build.sh always does; check.sh should stay quick).

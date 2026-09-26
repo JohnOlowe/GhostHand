@@ -32,7 +32,6 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$PROJ_ARG" ] || die "usage: build.sh PROJECT_DIR [options]"
-[ -n "$MIN_API" ] || MIN_API=24
 RELEASE="${RELEASE:-0}"
 androidx_setup
 
@@ -56,6 +55,13 @@ python3 "$HERE/xmlcheck.py" "$PROJ" "${ANDROIDX_XML_ARGS[@]+"${ANDROIDX_XML_ARGS
   || die "XML problems above (aapt2 would fail on most of them too)"
 
 # 2. resources --------------------------------------------------------------
+# The libraries' own minSdkVersion: Gradle merges those manifests, we do not, so a
+# dependency built for a newer platform would only show up as a NoSuchMethodError on
+# the oldest device. Invisible exactly when the AndroidX set changes.
+if [ -n "$ANDROIDX_CLASSES" ] && [ -f "$HERE/aar_floor.py" ]; then
+  python3 "$HERE/aar_floor.py" "$MIN_API" "$ANDROIDX_DIR/aar" || die "an AndroidX library needs a newer platform than min-api $MIN_API"
+fi
+
 msg "2/7 aapt2 compile (res/**, *.xml -> flat resource table)"
 aapt2_compile_res "$STAGE/res.zip"
 info "$(unzip -l "$STAGE/res.zip" | tail -1 | awk '{print $2}') compiled resource entries"
@@ -64,7 +70,13 @@ info "$(unzip -l "$STAGE/res.zip" | tail -1 | awk '{print $2}') compiled resourc
 msg "3/7 aapt2 link (manifest + resources -> base APK, emit R.java)"
 RES_ZIP="$STAGE/res.zip"
 rm -f "$UNSIGNED"
+# AGP marks a debug build android:debuggable="true"; aapt2 only does it when
+# asked, and without it the "debug" APK is merely unshrunk - no attached
+# debugger, no `run-as`, nothing in logcat saying it is debuggable.
+LINK_EXTRA=()
+[ "$RELEASE" = "1" ] || LINK_EXTRA+=(--debug-mode)
 aapt2_link "$UNSIGNED" "$STAGE/gen" --min-sdk-version "$MIN_API" --target-sdk-version "$TARGET_API" \
+  "${LINK_EXTRA[@]+"${LINK_EXTRA[@]}"}" \
   --version-code "${VERSION_CODE:-1}" --version-name "${VERSION_NAME:-1.0}"
 
 # 4. Java -------------------------------------------------------------------
@@ -112,6 +124,12 @@ python3 "$HERE/zipalign.py" -c -p 4 --ignore-regex '^META-INF/' "$FINAL" | sed '
 msg "result"
 "$AAPT2" dump badging "$FINAL" 2>/dev/null | sed -n '1,6p' | sed 's/^/    /'
 info "APK: $FINAL ($(du -h "$FINAL" | cut -f1))"
+
+msg "verify: is the artifact actually intact?"
+python3 "$HERE/verify_apk.py" "$FINAL" --manifest "$MANIFEST" \
+  --allowlist "$PROJ/packaging-allowlist.txt" \
+  --kind "$( [ "$RELEASE" = 1 ] && echo release || echo debug )" \
+  || die "the APK is not installable (see the failures above)"
 
 if [ "$VERIFY" = "1" ]; then
   msg "extra verification"

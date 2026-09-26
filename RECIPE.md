@@ -7,8 +7,8 @@ no network access except a small egress allowlist.
 Working implementation lives in [`toolchain/`](toolchain/) — `setup.sh`, `check.sh`,
 `build.sh`, `test.sh`, `xmlcheck.py`, `zipalign.py` — plus a runnable
 [`sample/`](sample/) app and an AndroidX one, [`sample-androidx/`](sample-androidx/).
-Timings from the sandbox: **setup 10 s, check 2 s, unit tests 2 s, APK build 6 s;
-AndroidX fetch + fuse 35 s (one-off), AndroidX APK build 50 s (Debug) / 39 s (R8).**
+Timings from the sandbox: **setup 11 s, check 2 s, unit tests 2 s, APK build 6 s;
+AndroidX fetch + fuse 31 s (one-off), AndroidX APK build 52 s (Debug) / 35 s (R8).**
 
 ---
 
@@ -26,6 +26,8 @@ AndroidX fetch + fuse 35 s (one-off), AndroidX APK build 50 s (Debug) / 39 s (R8
 | Disassemble/verify an APK | **apktool 2.4.1** | npm `apktool-jar` |
 | Run unit tests on the JVM | **JUnit 4.13.2 + Hamcrest** | npm `@vscjava/java-language-server` |
 | Android XML lint before compiling | `xmlcheck.py` | this repo (stdlib only) |
+| Kotlin runtime (AndroidX needs it) | **kotlin-stdlib 1.9.25** | npm `kotlin-compiler` |
+| Check the finished APK | `verify_apk.py`, `manifest_keep.py`, `aar_floor.py` | this repo (section 9.5) |
 | **AndroidX** (appcompat, material, recyclerview, …) | **69 real AARs → one classpath jar + compiled resources + R classes** | a committed Gradle cache on GitHub (section 9) |
 
 `bash toolchain/setup.sh` fetches all of it (~170 MB, 10 s), verifies every tool by
@@ -308,25 +310,60 @@ java -jar ecj.jar -source 8 -target 8 -proc:none -bootclasspath android.jar \
 Material 3 theme — one layout referencing resources from four different AARs:
 
 ```bash
-bash toolchain/androidx.sh                    # fetch + assemble, 35 s, 33 MB in vendor/
+bash toolchain/androidx.sh                    # fetch + assemble, 31 s, 33 MB in vendor/
 bash toolchain/check.sh  sample-androidx      #  17 s  CHECK PASSED   (R classes + ECJ)
 bash toolchain/test.sh   sample-androidx      #   7 s  OK (3 tests)   (JUnit on the JRE)
-bash toolchain/build.sh  sample-androidx --verify            # 50 s -> 5.4 MB APK, 6 dex, 50 168 methods
-bash toolchain/build.sh  sample-androidx --release --verify  # 39 s -> 1.6 MB APK after R8 shrinking
+bash toolchain/build.sh  sample-androidx                     # 52 s -> 5.4 MB APK, 7 dex
+bash toolchain/build.sh  sample-androidx --release --verify  # 35 s -> 1.6 MB APK after R8 (0.4 MB of dex)
 ```
 
 Every claim above is checked by a different tool: `aapt2 dump badging`, `apksigner
-verify`, `zipalign -c`, and `apktool d` decoding 5 467 `.smali` files back out of the
-APK — including `smali/androidx/appcompat/**`. AndroidX is applied automatically when
-a project mentions `androidx.`, `Theme.AppCompat`, `Theme.Material3`,
-`MaterialComponents` or `com.google.android.material` (so the plain `sample/` stays a
-2 s, 8 KB-dex build); `--no-androidx` / `GH_ANDROIDX=off` opts out.
+verify`, `zipalign -c`, `apktool d` decoding the APK back to `smali/androidx/**`, and
+`toolchain/verify_apk.py` reading the dex and the manifest. AndroidX is applied
+automatically when a project mentions `androidx.`, `Theme.AppCompat`,
+`Theme.Material3`, `MaterialComponents` or `com.google.android.material` (so the plain
+`sample/` stays a 2 s, 8 KB-dex build); `--no-androidx` / `GH_ANDROIDX=off` opts out.
 
 Known limits: library `<provider>`/`<receiver>` entries are not manifest-merged
 (androidx.startup, emoji2 and profileinstaller auto-init therefore do not run — no
 crash, they simply stay dormant), resources are merged non-namespaced with
 `--auto-add-overlay`, and dependency versions are whatever the harvested cache
 contains.
+
+### 9.5 The bugs this build had, and the checks that now catch them
+
+Section 9 is easy to write and was wrong in six ways. What found them was a *second*
+project: someone built a real app on this toolchain, one with a UI and a floor of API
+19, and five of the six defects below only appear on a device. They are listed because
+"it compiles and signs" is precisely the claim that hid them — every one of them
+produced a valid, signed, green APK.
+
+| # | Effect on a device | Cause | Check now in the toolchain |
+|---|---|---|---|
+| 1 | `ClassNotFoundException` on **every launch** | AndroidX is partly Kotlin; nothing vendored `kotlin-stdlib`, so the dex named 119 types the APK did not define — 63 of them `kotlin/*`, including `kotlin.jvm.internal.Intrinsics`, reached from `ComponentActivity`'s constructor | `setup.sh` vendors `kotlin-stdlib.jar` (npm `kotlin-compiler`, 1.9.25); `verify_apk.py` fails any APK that names an app-space type it does not define |
+| 2 | launch crash (any device), release build only | R8 never reads `AndroidManifest.xml`: the launcher activity looked unused and was deleted — with a *hand-written* keep list in `proguard.pro` that had quietly missed it | `manifest_keep.py` generates the keep rules from the manifest at release-dex time, and `verify_apk.py` re-derives the component list from the APK |
+| 3 | `Resources$NotFoundException` on a pre-21 phone | `aapt2 link` with `--min-sdk-version < 21` "versions" every `<vector>`: API-21 attributes move to `res/drawable-v21/` and the base file is left empty, so the file an old device inflates has no `viewportWidth` | `lib.sh` always passes `--no-version-vectors` (aapt2's own help: "use this only when building with vector drawable support library"); verified directly — plain link emits a gutted base, flagged link keeps all 531 bytes |
+| 4 | wrong bytecode, silently: a deleted class's dead class file still gets dexed and shipped | `ecj_compile()` never cleaned its output directory, and ECJ only writes what the current sources need | `ecj_compile` starts from an empty directory (verified: delete a source, rebuild, its type and string literals are gone) |
+| 5 | `NoClassDefFoundError` on the oldest supported phone | Dalvik loads one dex file; an unshrunk AndroidX app is 6-7 of them | `verify_apk.py` compares the dex count against the **manifest's own** `minSdkVersion` |
+| 6 | `NoSuchMethodError` on old phones | Gradle merges every AAR's manifest (and so raises the whole app's floor); the link step sees only the app manifest | `aar_floor.py` audits each vendored AAR's `minSdkVersion` in `build.sh` |
+
+Three more things the same exercise surfaced, which are not bugs but traps:
+
+* **A `-dontwarn` is a claim you cannot check.** `-dontwarn kotlin.**` made R8 report
+  nothing while the Kotlin runtime was missing, and the build stayed green. Missing
+  classes are errors now; the one remaining exemption in `sample-androidx` names the
+  exact class and method R8 reports (`kotlinx.coroutines.flow.MutableStateFlow`,
+  referenced from `SavedStateHandle.set`), and the same reference is declared in
+  `packaging-allowlist.txt`.
+* **The floor has one source of truth: the manifest.** `--min-api` defaulted to 24
+  while the manifest said 21, so `apksigner` was told not to write the v1 signature the
+  artifact needed, and it rejected the APK. `minSdkVersion` is now read out of the
+  manifest unless `--min-api` is given.
+* **Dependency lists rot silently.** `androidx.collection-ktx`/`core-ktx`/`fragment-ktx`
+  and the `libs/*.jar` inside an AAR (emoji2 ships its flatbuffer classes that way) are
+  real code that a naive "take the AARs" harvest drops. Both are in the assembler now;
+  `verify_apk.py` is what points at each of them (it named `SparseArrayKt`, `BundleKt`
+  and `FragmentViewModelLazyKt`).
 
 ---
 

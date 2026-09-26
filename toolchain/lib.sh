@@ -52,10 +52,21 @@ load_env() {
 androidx_setup() {
   ANDROIDX_DIR="${ANDROIDX_DIR:-$GH_TOOLCHAIN/androidx}"
   ANDROIDX_CLASSES=""
+  ANDROIDX_LIBS=()
   ANDROIDX_ARGS=()
   ANDROIDX_STATE="off (--no-androidx)"
   [ "${ANDROIDX_OFF:-0}" = "1" ] && return 0
   [ -s "$ANDROIDX_DIR/androidx.jar" ] && ANDROIDX_CLASSES="$ANDROIDX_DIR/androidx.jar"
+  # Kotlin's runtime is not optional next to AndroidX: activity/fragment/
+  # lifecycle are compiled from Kotlin, so their classes call
+  # kotlin.jvm.internal.Intrinsics on ordinary paths (see setup.sh step 8b). It is
+  # a program input - the classes must land in the dex. The annotations jar is a
+  # *library* input: CLASS-retention metadata, never loaded on a device.
+  if [ -n "$ANDROIDX_CLASSES" ] && [ -s "$GH_TOOLCHAIN/kotlin-stdlib.jar" ]; then
+    ANDROIDX_CLASSES="$ANDROIDX_CLASSES:$GH_TOOLCHAIN/kotlin-stdlib.jar"
+    [ -s "$GH_TOOLCHAIN/kotlin-annotations.jar" ] \
+      && ANDROIDX_LIBS+=(--lib "$GH_TOOLCHAIN/kotlin-annotations.jar")
+  fi
   if [ -d "$ANDROIDX_DIR/res" ]; then
     for z in "$ANDROIDX_DIR"/res/*.zip; do
       [ -s "$z" ] && ANDROIDX_ARGS+=(-R "$z")
@@ -93,6 +104,19 @@ detect_layout() {
   fi
   ASSETS_DIR="$(dirname "$MANIFEST")/assets"
   [ -f "$MANIFEST" ] || die "no AndroidManifest.xml under $dir"
+  # The floor is the manifest's own minSdkVersion unless --min-api overrides it:
+  # it decides aapt2's versioning rules, D8 --min-api and whether apksigner must
+  # write a v1 signature. A flag default that disagrees with the artifact is how
+  # an APK ends up claiming a floor it cannot run on (apksigner rejected one).
+  if [ -z "${MIN_API:-}" ]; then
+    MIN_API="$(python3 - "$MANIFEST" <<'MSDK'
+import re, sys
+text = open(sys.argv[1], encoding="utf-8", errors="ignore").read()
+m = re.search(r'minSdkVersion\s*=\s*"(\d+)"', text)
+print(m.group(1) if m else "24")
+MSDK
+)"
+  fi
   androidx_apply
 }
 
@@ -104,7 +128,7 @@ detect_layout() {
 androidx_apply() {
   local mode="${GH_ANDROIDX:-auto}"
   case "$mode" in
-    off) ANDROIDX_CLASSES=""; ANDROIDX_ARGS=(); ANDROIDX_XML_ARGS=(); return 0 ;;
+    off) ANDROIDX_CLASSES=""; ANDROIDX_ARGS=(); ANDROIDX_XML_ARGS=(); ANDROIDX_LIBS=(); return 0 ;;
     on)  return 0 ;;
   esac
   [ -n "$ANDROIDX_CLASSES" ] || return 0
@@ -115,7 +139,7 @@ androidx_apply() {
   # theme and must not drag AndroidX in, while any TextAppearance.Material3 or
   # Theme.AppCompat reference must.
   if ! grep -rqEl 'androidx\.[a-z]|com\.google\.android\.material|Theme\.AppCompat|Theme\.Material3|MaterialComponents' "${paths[@]}" 2>/dev/null; then
-    ANDROIDX_CLASSES=""; ANDROIDX_ARGS=(); ANDROIDX_XML_ARGS=()
+    ANDROIDX_CLASSES=""; ANDROIDX_ARGS=(); ANDROIDX_XML_ARGS=(); ANDROIDX_LIBS=()
     ANDROIDX_STATE="skipped (project does not mention AndroidX; GH_ANDROIDX=on forces it)"
   else
     ANDROIDX_STATE="$ANDROIDX_DIR"
@@ -149,6 +173,16 @@ aapt2_link() {
   [ -n "${RES_ZIP:-}" ] && [ -s "$RES_ZIP" ] && args+=(-R "$RES_ZIP")
   [ "${#ANDROIDX_ARGS[@]}" -gt 0 ] && args+=("${ANDROIDX_ARGS[@]}")
   [ -d "$ASSETS_DIR" ] && args+=(-A "$ASSETS_DIR")
+  # Below API 21 aapt2 "versions" every <vector> unless told not to: it moves
+  # viewportWidth/fillColor/pathData into res/drawable-v21/ and leaves the base
+  # file as an empty <vector>. A pre-21 device inflates the base, so AppCompat's
+  # VdcInflateDelegate fails and the platform fallback has never heard of
+  # <vector>: Resources$NotFoundException at launch. Measured with our own
+  # aapt2: link --min-sdk-version 19 emits drawable-v21/ic_star.xml carrying the
+  # geometry and leaves res/drawable/ic_star.xml empty; with this flag the base
+  # file keeps all 531 bytes. aapt2's own help: "Use this only when building with
+  # vector drawable support library" - which is this build.
+  args+=(--no-version-vectors)
   [ -n "${MIN_API:-}" ] && args+=(--min-sdk-version "$MIN_API")
   [ -n "${TARGET_API:-}" ] && args+=(--target-sdk-version "$TARGET_API")
   "$AAPT2" link "${args[@]}" "$@" || die "aapt2 link failed (this is the XML/resource compile step)"
@@ -157,6 +191,13 @@ aapt2_link() {
 # ecj_compile OUT_CLASSES GEN_DIR [extra args...]   -- javac, 100% Java, no JDK
 ecj_compile() {
   local out="$1" gen="$2"; shift 2
+  # Start from an empty directory. ECJ only writes the classes its sources need,
+  # so a class whose source was deleted or renamed stays on disk and gets dexed
+  # into the APK: bytecode nothing in src/ explains, referencing types that may
+  # no longer exist. Verified the hard way - a source file deleted between two
+  # builds still shipped its string literal in the dex. javac and AGP both clean
+  # their output directory; this now does too.
+  rm -rf "$out"
   mkdir -p "$out"
   local files
   files=$(find "$SRC_DIR" "$gen" -name '*.java' 2>/dev/null)
@@ -194,18 +235,38 @@ dex() {
   local classes; classes=$(find "$CLASSES_DIR" -name '*.class')
   [ -n "$classes" ] || die "nothing to dex: $CLASSES_DIR is empty"
   # AndroidX classes are program input, not a library: they must land in the dex.
+  # ANDROIDX_CLASSES is a colon-joined classpath (what ECJ wants); the dexers
+  # take one path per argument. Passing the joined string to D8/R8 fails with
+  # NoSuchFileException: /a.jar:/b.jar - checked, so it is split here.
   local ax=()
-  [ -n "$ANDROIDX_CLASSES" ] && [ "${DEX_SKIP_ANDROIDX:-0}" != "1" ] && ax=("$ANDROIDX_CLASSES")
+  if [ -n "$ANDROIDX_CLASSES" ] && [ "${DEX_SKIP_ANDROIDX:-0}" != "1" ]; then
+    IFS=':' read -r -a ax <<< "$ANDROIDX_CLASSES"
+  fi
   if [ "${RELEASE:-0}" = "1" ]; then
     local pgconf="$PROJ/proguard.pro"
     local extra=()
     [ -f "$pgconf" ] && extra=(--pg-conf "$pgconf")
+    # R8 never reads AndroidManifest.xml: an activity the framework instantiates
+    # by name looks unused and gets deleted, producing a signed APK whose
+    # launcher class does not exist (verified: remove the hand-written keeps and
+    # the release dex loses MainActivity while the build still says BUILD OK).
+    # AGP generates these rules from the merged manifest; so do we.
+    local keeper
+    keeper="$(mktemp "${TMPDIR:-/tmp}/ghosthand-manifest-keep.XXXXXX")"
+    if python3 "$TC_DIR/manifest_keep.py" "${MANIFEST:?}" --out "$keeper" 2>&1 | sed 's/^/    /'; then
+      extra+=(--pg-conf "$keeper")
+    else
+      rm -f "$keeper"; die "could not generate manifest keep rules"
+    fi
     "$JAVA" -cp "$D8_JAR" com.android.tools.r8.R8 --release --dex \
-      --min-api "$min_api" --lib "$ANDROID_JAR" "${extra[@]}" "$@" \
-      --output "$out" $classes "${ax[@]}" || die "R8 failed"
+      --min-api "$min_api" --lib "$ANDROID_JAR" "${ANDROIDX_LIBS[@]+"${ANDROIDX_LIBS[@]}"}" \
+      "${extra[@]}" "$@" --output "$out" $classes "${ax[@]}" \
+      || { rm -f "$keeper"; die "R8 failed"; }
+    rm -f "$keeper"
   else
     "$JAVA" -cp "$D8_JAR" com.android.tools.r8.D8 \
-      --min-api "$min_api" --lib "$ANDROID_JAR" "$@" \
-      --output "$out" $classes "${ax[@]}" || die "D8 failed (Java bytecode the dexer rejects?)"
+      --min-api "$min_api" --lib "$ANDROID_JAR" "${ANDROIDX_LIBS[@]+"${ANDROIDX_LIBS[@]}"}" \
+      "$@" --output "$out" $classes "${ax[@]}" \
+      || die "D8 failed (Java bytecode the dexer rejects?)"
   fi
 }

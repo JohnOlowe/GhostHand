@@ -49,7 +49,7 @@ print(d["versions"][ver]["dist"]["tarball"])' "$ver"
 }
 
 # ---------------------------------------------------------------------------
-say "1/7 Java runtime  (PyPI: jdk4py)"
+say "1/10 Java runtime  (PyPI: jdk4py)"
 if [ ! -x "$VENDOR/jre/bin/java" ]; then
   rm -rf "$VENDOR/tmp/jdk4py"
   python3 -m pip download --no-deps --only-binary :all: -q -d "$TMP" jdk4py \
@@ -64,7 +64,7 @@ fi
 ok "$("$VENDOR/jre/bin/java" -version 2>&1 | sed -n '1p')  [JRE only - no javac, by design]"
 
 # ---------------------------------------------------------------------------
-say "2/7 javac replacement (npm: @vscjava/java-language-server -> Eclipse ECJ)"
+say "2/10 javac replacement (npm: @vscjava/java-language-server -> Eclipse ECJ)"
 # The VS Code Java language server is a legitimate bundle of JDT, and JDT ships
 # the Eclipse batch compiler: pure Java, so it runs on any modern JRE.
 if [ ! -s "$VENDOR/ecj.jar" ] || [ ! -s "$VENDOR/junit.jar" ]; then
@@ -91,7 +91,7 @@ fi
 ok "$("$VENDOR/jre/bin/java" -jar "$VENDOR/ecj.jar" -help 2>&1 | sed -n '1p')"
 
 # ---------------------------------------------------------------------------
-say "3/7 dexer + signer + platform jar  (npm: @drxiaozhi/minapk)"
+say "3/10 dexer + signer + platform jar  (npm: @drxiaozhi/minapk)"
 # A single npm package that vendors the Android tools as plain jars:
 #   tools/d8.jar        R8/D8 dexer (JVM bytecode -> classes.dex)
 #   tools/apksigner.jar APK signer (v1/v2/v3)
@@ -116,7 +116,7 @@ ok "$("$VENDOR/jre/bin/java" -cp "$VENDOR/d8.jar" com.android.tools.r8.R8 --vers
 ok "apksigner.jar $(du -h "$VENDOR/apksigner.jar" | cut -f1), android.jar (API 34) $(du -h "$VENDOR/android.jar" | cut -f1)"
 
 # ---------------------------------------------------------------------------
-say "4/7 aapt2, the resource/XML compiler  (PyPI: aapt2)"
+say "4/10 aapt2, the resource/XML compiler  (PyPI: aapt2)"
 # The wheel is just three prebuilt aapt2 binaries; the Linux one runs here.
 if [ ! -x "$VENDOR/aapt2" ]; then
   python3 -m pip download --no-deps --only-binary :all: -q -d "$TMP" aapt2 || true
@@ -139,7 +139,7 @@ fi
 ok "$("$VENDOR/aapt2" version 2>&1 | tail -1)"
 
 # ---------------------------------------------------------------------------
-say "5/7 apktool  (npm: apktool-jar)  -- offline APK disassembly, optional but used by --verify"
+say "5/10 apktool  (npm: apktool-jar)  -- offline APK disassembly, optional but used by --verify"
 if [ ! -s "$VENDOR/apktool.jar" ]; then
   url=$(npm_url "apktool-jar")
   get "$url" "$TMP/apktool.tgz"
@@ -149,7 +149,7 @@ fi
 ok "$("$VENDOR/jre/bin/java" -jar "$VENDOR/apktool.jar" --version 2>/dev/null | tail -1 || echo 'apktool present')"
 
 # ---------------------------------------------------------------------------
-say "6/7 platform android.jar for API $API  (GitHub: Sable/android-platforms)"
+say "6/10 platform android.jar for API $API  (GitHub: Sable/android-platforms)"
 # minapk already gave us API 34. Any other level comes from a git partial clone:
 # GitHub is reachable, and a blob-filtered clone pulls only the blob we ask for.
 if [ "$API" != "34" ] || [ ! -s "$VENDOR/android.jar" ]; then
@@ -174,7 +174,7 @@ PY
 ok "android.jar API $API ready"
 
 # ---------------------------------------------------------------------------
-say "7/9 language-level classpath (android.jar minus the packages the JRE owns)"
+say "7/10 language-level classpath (android.jar minus the packages the JRE owns)"
 # ECJ cannot be handed an alternate *bootclasspath* above source level 8: the
 # module system refuses it ("package java.util is accessible from more than one
 # module"). So for -source 11/17 we compile against this filtered android.jar and
@@ -185,7 +185,7 @@ say "7/9 language-level classpath (android.jar minus the packages the JRE owns)"
 python3 "$HERE/filter_android_jar.py" "$VENDOR/android.jar" "$VENDOR/android-classpath.jar"
 
 # ---------------------------------------------------------------------------
-say "8/9 lambda stubs (the one class android.jar is missing)"
+say "8/10 lambda stubs (the one class android.jar is missing)"
 # -source 8 plus a lambda makes ECJ look for java.lang.invoke.LambdaMetafactory,
 # which android.jar does not contain (AGP ships it as core-lambda-stubs.jar in
 # build-tools). Compile our signature-only stub with ECJ itself; it is never run.
@@ -213,7 +213,58 @@ sys.exit(0 if want in names else 1)
 CHECK
 ok "lambda stubs ready ($(du -h "$VENDOR/core-lambda-stubs.jar" | cut -f1))"
 
-say "9/9 environment file"
+say "8b/10 Kotlin runtime  (npm: kotlin-compiler)  -- AndroidX is partly Kotlin"
+# This is a correctness requirement, not a nicety. Much of AndroidX is compiled
+# from Kotlin by Google (activity, fragment, lifecycle, window), so its classes
+# call kotlin.jvm.internal.Intrinsics on ordinary paths - androidx.lifecycle's
+# SavedStateHandleSupport, which ComponentActivity's constructor reaches, is one.
+# Gradle adds kotlin-stdlib as a transitive dependency; with no Gradle it has to
+# be vendored explicitly.
+#
+# Getting this wrong is silent. R8 only *warns* about a missing class (and a
+# -dontwarn line silences even that), so the APK builds, signs and verifies and
+# then dies with ClassNotFoundException on the first phone that runs it: the
+# first AndroidX build from this toolchain had 119 types the dex named and the
+# APK did not define, 63 of them kotlin/*. verify_apk.py now fails such an APK.
+#
+# There is no stdlib-only artifact on PyPI or npm, so it comes out of the
+# official Kotlin distribution published to npm as `kotlin-compiler`: extract
+# lib/kotlin-stdlib.jar (1.7 MB of a 91 MB tarball) and delete the rest. Pinned
+# to the 1.9 line on purpose - the generation the vendored AndroidX (appcompat
+# 1.6.1, material 1.10.0, activity 1.8.0) was built against; the 2.x stdlib
+# raises its own Android floor.
+KOTLIN_VERSION="${KOTLIN_VERSION:-1.9.25}"
+if [ ! -s "$VENDOR/kotlin-stdlib.jar" ] || [ ! -s "$VENDOR/kotlin-annotations.jar" ]; then
+  url=$(npm_url "kotlin-compiler" "$KOTLIN_VERSION")
+  get "$url" "$TMP/kotlin-compiler.tgz"
+  tar xzf "$TMP/kotlin-compiler.tgz" -C "$TMP" \
+      package/lib/kotlin-stdlib.jar package/lib/annotations-13.0.jar \
+    || die "the kotlin-compiler tarball has no lib/kotlin-stdlib.jar"
+  cp "$TMP/package/lib/kotlin-stdlib.jar" "$VENDOR/kotlin-stdlib.jar"
+  # The stdlib's own signatures reference org.jetbrains.annotations. Those are
+  # CLASS-retention: tools read them, a device never loads them. So this one is a
+  # *library* input to the dexers and does not ship - vendoring it beats another
+  # -dontwarn, which is exactly what hid the missing runtime class.
+  cp "$TMP/package/lib/annotations-13.0.jar" "$VENDOR/kotlin-annotations.jar"
+  rm -rf "$TMP/package" "$TMP/kotlin-compiler.tgz"
+fi
+python3 - "$VENDOR/kotlin-stdlib.jar" "$VENDOR/kotlin-annotations.jar" <<'CHK' || die "the Kotlin jars look wrong"
+import sys, zipfile
+stdlib, annotations = sys.argv[1], sys.argv[2]
+names = {p: set(zipfile.ZipFile(p).namelist()) for p in (stdlib, annotations)}
+want = {"kotlin/jvm/internal/Intrinsics.class": stdlib,
+        "kotlin/Unit.class": stdlib,
+        "org/jetbrains/annotations/NotNull.class": annotations}
+bad = [n for n, p in want.items() if n not in names[p]]
+for path in (stdlib, annotations):
+    print("    %-24s %5d classes" % (path.rsplit("/", 1)[-1] + ":", len(names[path])))
+if bad:
+    print("    MISSING: %s" % bad)
+sys.exit(1 if bad else 0)
+CHK
+ok "kotlin-stdlib.jar $KOTLIN_VERSION + annotations ready ($(du -h "$VENDOR/kotlin-stdlib.jar" | cut -f1))"
+
+say "9/10 environment file"
 # With a non-default --vendor the env file goes beside that vendor dir, so a
 # throwaway "--vendor /tmp/v35" run does not repoint the real toolchain.
 ENV_OUT="$HERE/env.sh"
@@ -234,6 +285,8 @@ export DEBUG_KEYSTORE="\$GH_TOOLCHAIN/debug.keystore"
 export JUNIT_JAR="\$GH_TOOLCHAIN/junit.jar"
 export HAMCREST_JAR="\$GH_TOOLCHAIN/hamcrest.jar"
 export LAMBDA_STUBS_JAR="\$GH_TOOLCHAIN/core-lambda-stubs.jar"
+export KOTLIN_STDLIB_JAR="\$GH_TOOLCHAIN/kotlin-stdlib.jar"
+export KOTLIN_ANNOTATIONS_JAR="\$GH_TOOLCHAIN/kotlin-annotations.jar"
 EOF
 ok "wrote $ENV_OUT"
 

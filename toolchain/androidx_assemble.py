@@ -79,6 +79,17 @@ def main(argv=None):
     stages = sorted(d for d in os.listdir(args.stage)
                     if os.path.isdir(os.path.join(args.stage, d)))
     jars = [os.path.join(args.stage, d, "classes.jar") for d in stages]
+    # AAR libs/*.jar: a library may bundle its own dependencies there (emoji2
+    # ships EmojiCompat's generated flatbuffer classes this way). AGP unpacks
+    # them onto the compile classpath; skipping them leaves the library's own
+    # classes referencing types that exist nowhere - a NoClassDefFoundError on
+    # first use. Found by running verify_apk.py over a built APK.
+    for d in stages:
+        libs_dir = os.path.join(args.stage, d, "libs")
+        if os.path.isdir(libs_dir):
+            for name in sorted(os.listdir(libs_dir)):
+                if name.endswith(".jar"):
+                    jars.append(os.path.join(libs_dir, name))
     jars = [j for j in jars if os.path.isfile(j)]
     if args.jars:
         for name in sorted(os.listdir(args.jars)):
