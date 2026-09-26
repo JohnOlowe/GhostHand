@@ -125,7 +125,7 @@ public class GhostProtocolTest {
                 GhostProtocol.TYPE_HELLO, GhostProtocol.TYPE_TOUCH, GhostProtocol.TYPE_PING,
                 GhostProtocol.TYPE_WELCOME, GhostProtocol.TYPE_PONG, GhostProtocol.TYPE_VIDEO_CONFIG,
                 GhostProtocol.TYPE_VIDEO, GhostProtocol.TYPE_GEOMETRY, GhostProtocol.TYPE_STATS,
-                GhostProtocol.TYPE_BYE,
+                GhostProtocol.TYPE_BYE, GhostProtocol.TYPE_GLOBAL_ACTION,
         };
         for (int i = 0; i < types.length; i++) {
             for (int j = i + 1; j < types.length; j++) {
@@ -141,13 +141,27 @@ public class GhostProtocolTest {
                 GhostProtocol.TYPE_HELLO, GhostProtocol.TYPE_TOUCH, GhostProtocol.TYPE_PING,
                 GhostProtocol.TYPE_WELCOME, GhostProtocol.TYPE_PONG, GhostProtocol.TYPE_VIDEO_CONFIG,
                 GhostProtocol.TYPE_VIDEO, GhostProtocol.TYPE_GEOMETRY, GhostProtocol.TYPE_STATS,
-                GhostProtocol.TYPE_BYE,
+                GhostProtocol.TYPE_BYE, GhostProtocol.TYPE_GLOBAL_ACTION,
         };
         for (byte type : types) {
             String name = GhostProtocol.typeName(type);
             assertFalse("no LOG name for type " + type, name.startsWith("UNKNOWN"));
         }
         assertTrue(GhostProtocol.typeName((byte) 99).startsWith("UNKNOWN"));
+    }
+
+    @Test
+    public void globalActionCodesMatchAccessibilityService() {
+        // The host forwards these numbers to AccessibilityService.performGlobalAction
+        // untouched, where GLOBAL_ACTION_BACK = 1, HOME = 2, RECENTS = 3 and
+        // NOTIFICATIONS = 4 on every platform this app can host on (floor: API 21;
+        // the constants have existed since API 16/18). A drift here would silently
+        // press the wrong button on the phone, which no other test could see.
+        assertEquals(1, GhostProtocol.GLOBAL_BACK);
+        assertEquals(2, GhostProtocol.GLOBAL_HOME);
+        assertEquals(3, GhostProtocol.GLOBAL_RECENTS);
+        assertEquals(4, GhostProtocol.GLOBAL_NOTIFICATIONS);
+        assertEquals(11, GhostProtocol.TYPE_GLOBAL_ACTION);
     }
 
     @Test

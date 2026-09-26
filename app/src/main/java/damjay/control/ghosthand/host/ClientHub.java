@@ -63,6 +63,13 @@ public class ClientHub implements ClientConnection.Listener {
          */
         void onGuestTouch(String clientName, int action, int xNormalized, int yNormalized,
                           long timeMs);
+
+        /**
+         * A navigation button the guest pressed (back/home/recents/shade). Delivered
+         * on the socket reader thread; the implementation hops to whatever thread the
+         * platform requires, exactly like {@link #onGuestTouch}.
+         */
+        void onGuestGlobalAction(String clientName, int action);
     }
 
     private final int port;
@@ -284,9 +291,7 @@ public class ClientHub implements ClientConnection.Listener {
 
     @Override
     public void onClientFrame(ClientConnection connection, Frame frame) {
-        // Guest -> host traffic. For the mirroring milestone only PING and TOUCH
-        // arrive here; TOUCH is acknowledged in the log so you can see the control
-        // channel working end to end before we add input injection.
+        // Guest -> host traffic: PING, TOUCH and GLOBAL_ACTION.
         switch (frame.type) {
             case GhostProtocol.TYPE_PING:
                 connection.send(new Frame(GhostProtocol.TYPE_PONG, (byte) 0,
@@ -303,6 +308,16 @@ public class ClientHub implements ClientConnection.Listener {
                         (int) t.getInt("xN", 0),
                         (int) t.getInt("yN", 0),
                         t.getInt("timeMs", System.currentTimeMillis()));
+                break;
+            }
+            case GhostProtocol.TYPE_GLOBAL_ACTION: {
+                Record g = frame.asRecord();
+                Listener l = listener;
+                if (l == null) {
+                    break;
+                }
+                l.onGuestGlobalAction(connection.getName(),
+                        (int) g.getInt("action", 0));
                 break;
             }
             case GhostProtocol.TYPE_BYE:

@@ -489,6 +489,17 @@ public class GuestController {
         sendFrame(new Frame(GhostProtocol.TYPE_TOUCH, (byte) 0, timeMs * 1000L, r.toBytes()));
     }
 
+    /**
+     * Asks the host to perform a system navigation action (back / home / recents /
+     * notification shade). The guest sends the *command*, never a synthetic swipe:
+     * edge gestures cannot survive letterboxing (the video rarely reaches the host
+     * screen's true edge), and performGlobalAction() on the host is exact.
+     */
+    public void sendGlobalAction(int action) {
+        Record r = Record.create().putInt("action", action);
+        sendFrame(new Frame(GhostProtocol.TYPE_GLOBAL_ACTION, (byte) 0, 0L, r.toBytes()));
+    }
+
     private void sendFrame(Frame frame) {
         Socket s = socket;
         if (s == null || !connected) {

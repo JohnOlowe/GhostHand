@@ -80,6 +80,8 @@ public class ScreenCaptureService extends Service
     public static final String EXTRA_RESULT_CODE = "resultCode";
     public static final String EXTRA_RESULT_DATA = "resultData";
     public static final String EXTRA_MAX_SIDE = "maxSide";
+    /** Capture frame rate for the session (the host UI's FPS dropdown). */
+    public static final String EXTRA_FPS = "fps";
     /** true = mirror the built-in display; false = behave like a second display. */
     public static final String EXTRA_MIRROR_FLAG = "mirrorFlag";
     /**
@@ -119,8 +121,13 @@ public class ScreenCaptureService extends Service
     private HostController controller;
     private PowerManager.WakeLock wakeLock;
 
-    /** Target frame rate for the whole session. */
-    private static final int FPS = 30;
+    /**
+     * Default capture rate. 20 rather than 30: on a busy link the lower rate means
+     * fewer bits per second into the same pipe, so queues drain instead of growing -
+     * less end-to-end lag for a guest that mostly watches and pokes. The host UI can
+     * still pick 15 or 30 per session (EXTRA_FPS).
+     */
+    public static final int DEFAULT_FPS = 20;
 
     /**
      * Buffers guest touches into gestures. One instance for the whole service: a
@@ -134,6 +141,7 @@ public class ScreenCaptureService extends Service
     private int densityDpi;
     private int currentBitrate;
     private int maxSide = 1280;
+    private int targetFps = DEFAULT_FPS;
     private boolean useMirrorFlag = true;
 
     /** Last SPS/PPS so a re-created encoder can be pushed to existing guests. */
@@ -226,6 +234,9 @@ public class ScreenCaptureService extends Service
         int resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0);
         android.content.Intent data = intent.getParcelableExtra(EXTRA_RESULT_DATA);
         maxSide = intent.getIntExtra(EXTRA_MAX_SIDE, 1280);
+        // Clamp to sane bounds: the dropdown offers 15/20/30, but the intent is an
+        // IPC surface and a garbage value must not reach the encoder's configure().
+        targetFps = Math.max(5, Math.min(60, intent.getIntExtra(EXTRA_FPS, DEFAULT_FPS)));
         boolean mirror = intent.getBooleanExtra(EXTRA_MIRROR_FLAG, true);
 
         if (data == null) {
@@ -327,12 +338,12 @@ public class ScreenCaptureService extends Service
         videoHeight = size[1];
         rotation = rotationFromMetrics(metrics);
         densityDpi = metrics.densityDpi;
-        currentBitrate = GhostProtocol.suggestedBitrate(videoWidth, videoHeight, FPS);
+        currentBitrate = GhostProtocol.suggestedBitrate(videoWidth, videoHeight, targetFps);
     }
 
     /** Creates and starts the H.264 encoder for the current capture size. */
     private void createEncoder() throws IOException {
-        encoder = new ScreenEncoder(videoWidth, videoHeight, currentBitrate, FPS, this);
+        encoder = new ScreenEncoder(videoWidth, videoHeight, currentBitrate, targetFps, this);
         encoder.start();
     }
 
@@ -387,7 +398,7 @@ public class ScreenCaptureService extends Service
             lastError = null;
             updateNotification(getString(R.string.notif_running));
             broadcastState();
-            log("capturing " + videoWidth + "x" + videoHeight + " @" + FPS + "fps, "
+            log("capturing " + videoWidth + "x" + videoHeight + " @" + targetFps + "fps, "
                     + (currentBitrate / 1000) + " kbps");
             main.postDelayed(statsTick, 1000);
         } catch (IOException e) {
@@ -738,6 +749,47 @@ public class ScreenCaptureService extends Service
                 log("injected " + ready + " from " + clientName);
             }
         });
+    }
+
+    /**
+     * A navigation button from a guest: back / home / recents / shade on THIS phone.
+     * Posted to the main thread like {@code dispatchGesture} is.
+     *
+     * <p>Deliberately <em>not</em> gated on {@link ApiLevels#canInject}: that gate is
+     * about dispatchGesture, which only exists on API 24. performGlobalAction() has
+     * existed since API 16, so if the accessibility service is connected the four
+     * buttons work even on hosts whose gestures do not (API 21-23).
+     */
+    @Override
+    public void onGuestGlobalAction(String clientName, int action) {
+        if (action < GhostProtocol.GLOBAL_BACK || action > GhostProtocol.GLOBAL_NOTIFICATIONS) {
+            log("nav action " + action + " from " + clientName + " ignored - out of range");
+            return;
+        }
+        main.post(() -> {
+            InjectionAccessibilityService svc = InjectionAccessibilityService.instance();
+            if (svc == null) {
+                log("nav " + actionName(action) + " from " + clientName
+                        + " ignored - enable touch control (accessibility) on this phone");
+                return;
+            }
+            if (svc.performGlobalAction(action)) {
+                log("nav " + actionName(action) + " from " + clientName);
+            } else {
+                log("nav " + actionName(action) + " from " + clientName
+                        + " refused by the system");
+            }
+        });
+    }
+
+    private static String actionName(int action) {
+        switch (action) {
+            case GhostProtocol.GLOBAL_BACK: return "back";
+            case GhostProtocol.GLOBAL_HOME: return "home";
+            case GhostProtocol.GLOBAL_RECENTS: return "recents";
+            case GhostProtocol.GLOBAL_NOTIFICATIONS: return "shade";
+            default: return "action" + action;
+        }
     }
 
     // ------------------------------- telemetry --------------------------------

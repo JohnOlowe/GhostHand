@@ -158,6 +158,7 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
         setupSurface();
         setupControls();
         setupTouchForwarding();
+        setupSystemControls();
 
         // The root lays out asynchronously and letterboxing needs real pixel sizes,
         // so re-run the calculation whenever the layout changes.
@@ -348,6 +349,7 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
         txtStatus.setText(R.string.guest_status_idle);
         showOverlay(getString(R.string.guest_status_idle));
         panelConnect.setVisibility(View.VISIBLE);
+        findViewById(R.id.controlsBar).setVisibility(View.GONE);
         dotStatus.setActivated(false);
         dotStatus.setSelected(false);
         txtStatFps.setText("");
@@ -481,6 +483,24 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
      * ({@code dispatchGesture}) or a shell-level helper. The transport already works end
      * to end - watch the host's log to see every touch arrive.
      */
+    /**
+     * The four host-navigation buttons (back / home / recents / notification shade).
+     * They live in the layout, overlay the video corner, and talk to the HOST phone:
+     * a letterboxed stream cannot express an edge swipe - the finger would have to
+     * start on the host screen's true edge, and the video rarely reaches it - so the
+     * gesture becomes a command instead.
+     */
+    private void setupSystemControls() {
+        findViewById(R.id.btnNavBack).setOnClickListener(v ->
+                controller.sendGlobalAction(GhostProtocol.GLOBAL_BACK));
+        findViewById(R.id.btnNavHome).setOnClickListener(v ->
+                controller.sendGlobalAction(GhostProtocol.GLOBAL_HOME));
+        findViewById(R.id.btnNavRecents).setOnClickListener(v ->
+                controller.sendGlobalAction(GhostProtocol.GLOBAL_RECENTS));
+        findViewById(R.id.btnNavShade).setOnClickListener(v ->
+                controller.sendGlobalAction(GhostProtocol.GLOBAL_NOTIFICATIONS));
+    }
+
     private void setupTouchForwarding() {
         videoContainer.setOnTouchListener((view, event) -> {
             if (!connected || streamWidth <= 0 || streamHeight <= 0) {
@@ -552,6 +572,7 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
             streamHeight = height;
         }
         appendLog("connected to '" + hostName + "' " + streamWidth + "x" + streamHeight);
+        findViewById(R.id.controlsBar).setVisibility(View.VISIBLE);
         btnConnect.setEnabled(false);
         btnDisconnect.setEnabled(true);
         txtStatus.setText(getString(R.string.guest_status_connected) + " · " + hostName);

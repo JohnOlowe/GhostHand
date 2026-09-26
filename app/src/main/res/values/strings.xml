@@ -50,7 +50,21 @@
         <item>Native — full panel size</item>
     </string-array>
 
+    <string name="host_fps">Frame rate</string>
+    <!-- Index-aligned with HostActivity.FPS_PRESETS = {15, 20, 30}. -->
+    <string-array name="host_fps_options">
+        <item>15 — least lag</item>
+        <item>20 — balanced (default)</item>
+        <item>30 — smoothest</item>
+    </string-array>
+
     <!-- =============================== guest ============================== -->
+    <!-- Host navigation buttons. The guest phone never performs these actions on
+         itself: they are sent over the wire as GhostProtocol.GLOBAL_*. -->
+    <string name="guest_nav_back">Back</string>
+    <string name="guest_nav_home">Home</string>
+    <string name="guest_nav_recents">Recents</string>
+    <string name="guest_nav_shade">Shade</string>
     <string name="title_guest">Guest</string>
     <string name="guest_status_idle">Not connected</string>
     <string name="guest_status_discovering">Searching for hosts…</string>

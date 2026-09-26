@@ -80,6 +80,21 @@ public final class GhostProtocol {
     public static final byte TYPE_STATS = 9;
     /** Polite shutdown. Payload: optional UTF-8 reason. */
     public static final byte TYPE_BYE = 10;
+    /** Guest -> host: perform a system navigation action. Record{action}, see GLOBAL_*. */
+    public static final byte TYPE_GLOBAL_ACTION = 11;
+
+    // Wire codes for TYPE_GLOBAL_ACTION. They deliberately equal
+    // AccessibilityService.GLOBAL_ACTION_* on every platform this app hosts on
+    // (BACK/HOME/RECENTS exist since API 16, NOTIFICATIONS since 18; the host floor
+    // is 21), so the host forwards the number to performGlobalAction() untouched.
+    /** "Back" - what the guest's Back button sends. */
+    public static final int GLOBAL_BACK = 1;
+    /** "Home" - jump to the host's launcher. */
+    public static final int GLOBAL_HOME = 2;
+    /** The recents/overview screen. */
+    public static final int GLOBAL_RECENTS = 3;
+    /** The notification shade - the "swipe down from the top" gesture as a button. */
+    public static final int GLOBAL_NOTIFICATIONS = 4;
 
     /** flags bit 0: this VIDEO frame is an IDR (a guest can start decoding here). */
     public static final byte FLAG_KEYFRAME = 1;
@@ -101,6 +116,7 @@ public final class GhostProtocol {
             case TYPE_GEOMETRY: return "GEOMETRY";
             case TYPE_STATS: return "STATS";
             case TYPE_BYE: return "BYE";
+            case TYPE_GLOBAL_ACTION: return "GLOBAL_ACTION";
             default: return "UNKNOWN(" + type + ")";
         }
     }

@@ -76,6 +76,9 @@ public class HostActivity extends AppCompatActivity {
     /** Longest-side presets, index-aligned with R.array.host_resolution_options. */
     private static final int[] RESOLUTION_PRESETS = { 480, 720, 1280, 1920, 4096 };
     private static final int DEFAULT_PRESET_INDEX = 2;
+    /** FPS presets, index-aligned with R.array.host_fps_options. */
+    private static final int[] FPS_PRESETS = { 15, 20, 30 };
+    private static final int DEFAULT_FPS_INDEX = 1;
 
     // views (see res/layout/activity_host.xml)
     private View dotStatus;
@@ -89,6 +92,8 @@ public class HostActivity extends AppCompatActivity {
     private TextView txtStatDropped;
     private MaterialButton btnToggle;
     private MaterialAutoCompleteTextView spnResolution;
+    private com.google.android.material.textfield.TextInputLayout boxFps;
+    private MaterialAutoCompleteTextView spnFps;
     private TextInputLayout boxResolution;
     private MaterialSwitch swMirror;
 
@@ -190,6 +195,8 @@ public class HostActivity extends AppCompatActivity {
         txtStatDropped = findViewById(R.id.txtStatDropped);
         btnToggle = findViewById(R.id.btnToggle);
         spnResolution = findViewById(R.id.spnResolution);
+        boxFps = findViewById(R.id.boxFps);
+        spnFps = findViewById(R.id.spnFps);
         boxResolution = findViewById(R.id.boxResolution);
         swMirror = findViewById(R.id.swMirror);
         dotTouch = findViewById(R.id.dotTouch);
@@ -254,6 +261,8 @@ public class HostActivity extends AppCompatActivity {
         // (label, value) pairs to keep in sync.
         spnResolution.setSimpleItems(R.array.host_resolution_options);
         spnResolution.setText(resolutionLabels()[DEFAULT_PRESET_INDEX], false);
+        spnFps.setSimpleItems(R.array.host_fps_options);
+        spnFps.setText(fpsLabels()[DEFAULT_FPS_INDEX], false);
 
         btnToggle.setOnClickListener(v -> onToggleClicked());
 
@@ -359,18 +368,36 @@ public class HostActivity extends AppCompatActivity {
         // The permission token is a Parcelable Intent; the service needs it verbatim.
         intent.putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, data);
         intent.putExtra(ScreenCaptureService.EXTRA_MAX_SIDE, selectedMaxSide());
+        intent.putExtra(ScreenCaptureService.EXTRA_FPS, selectedFps());
         intent.putExtra(ScreenCaptureService.EXTRA_MIRROR_FLAG, mirror);
 
         ContextCompat.startForegroundService(this, intent);
 
         // Keep the screen awake so the capture keeps producing frames.
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        appendLog("capture service starting (" + selectedMaxSide() + " px longest side)");
+        appendLog("capture service starting (" + selectedMaxSide() + " px longest side, "
+                + selectedFps() + " fps)");
         renderState(ScreenCaptureService.STATE_RUNNING, null);
+    }
+
+    /** Maps the FPS dropdown's visible label back to a preset by index. */
+    private int selectedFps() {
+        String[] labels = fpsLabels();
+        String chosen = spnFps.getText() == null ? "" : spnFps.getText().toString();
+        for (int i = 0; i < labels.length && i < FPS_PRESETS.length; i++) {
+            if (labels[i].equals(chosen)) {
+                return FPS_PRESETS[i];
+            }
+        }
+        return FPS_PRESETS[DEFAULT_FPS_INDEX];
     }
 
     private String[] resolutionLabels() {
         return getResources().getStringArray(R.array.host_resolution_options);
+    }
+
+    private String[] fpsLabels() {
+        return getResources().getStringArray(R.array.host_fps_options);
     }
 
     /** Maps the dropdown's visible label back to a preset by index. */
@@ -471,6 +498,7 @@ public class HostActivity extends AppCompatActivity {
         // The dropdown only matters before a session starts: a different capture size
         // needs a brand new encoder, which is what stopping and starting does.
         boxResolution.setEnabled(!running);
+        boxFps.setEnabled(!running);
         if (!running) {
             getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
             txtStatFps.setText("0");

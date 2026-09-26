@@ -74,6 +74,68 @@
             android:textSize="12sp" />
     </LinearLayout>
 
+    <!-- Host navigation as four buttons: back, home, recents, notification shade.
+         They sit in the ROOT frame (not inside videoContainer), so their taps are
+         consumed here and never reach the touch-forwarding listener - everything
+         outside this bar still goes to the video, and hence to the host. Visible
+         only while connected; immersive mode keeps it on screen, which is exactly
+         when it is needed. -->
+    <LinearLayout
+        android:id="@+id/controlsBar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="10dp"
+        android:background="@drawable/bg_pill"
+        android:orientation="horizontal"
+        android:padding="2dp"
+        android:visibility="gone">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnNavBack"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="0dp"
+            android:paddingLeft="8dp"
+            android:paddingRight="8dp"
+            android:text="@string/guest_nav_back"
+            android:textSize="12sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnNavHome"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="0dp"
+            android:paddingLeft="8dp"
+            android:paddingRight="8dp"
+            android:text="@string/guest_nav_home"
+            android:textSize="12sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnNavRecents"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="0dp"
+            android:paddingLeft="8dp"
+            android:paddingRight="8dp"
+            android:text="@string/guest_nav_recents"
+            android:textSize="12sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnNavShade"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="0dp"
+            android:paddingLeft="8dp"
+            android:paddingRight="8dp"
+            android:text="@string/guest_nav_shade"
+            android:textSize="12sp" />
+    </LinearLayout>
+
     <!-- ===================== connect / detail panel ===================== -->
     <com.google.android.material.card.MaterialCardView
         android:id="@+id/panelConnect"

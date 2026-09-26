@@ -124,9 +124,11 @@ public class ScreenEncoder {
         format.setInteger(MediaFormat.KEY_BITRATE_MODE,
                 MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR);
         format.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
-        // One key frame every 2 seconds. A late-joining guest waits at most that
-        // long for a clean picture; shorter intervals would waste bandwidth.
-        format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2);
+        // A key frame every second: this is the glitch clock. A dropped frame is
+        // unrecoverable until the next IDR, so the interval bounds the freeze - 1 s
+        // halves the worst stall a guest can see (late joins included) for a few
+        // percent of extra bitrate.
+        format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
         // Lowest latency: the encoder must not sit on frames to build B-frame
         // groups or look-ahead statistics. Ignored by codecs that do not know the key.
         format.setInteger(MediaFormat.KEY_LATENCY, 1);

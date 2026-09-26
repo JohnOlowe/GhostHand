@@ -33,7 +33,7 @@ Package `damjay.control.ghosthand` · **minSdk 19 (Android 4.4)** · targetSdk 3
 ```bash
 git clone https://github.com/JohnOlowe/GhostHand.git
 cd GhostHand
-bash build.sh                 # setup + AndroidX + 88 unit tests + signed APK (~2.5 min cold)
+bash build.sh                 # setup + AndroidX + 89 unit tests + signed APK (~2.5 min cold)
 ```
 
 `build.sh` installs the toolchain into `toolchain/vendor` (JRE, Eclipse compiler, aapt2,
@@ -336,6 +336,7 @@ what `DataInputStream` and `ByteBuffer` do by default.
 | 8 | `GEOMETRY` | host -> guest | `Record{w, h, rotation}` after a rotate/resize |
 | 9 | `STATS` | host -> guest | `Record{fps, kbps, dropped, clients, uptimeMs}` |
 | 10 | `BYE` | either | UTF-8 reason |
+| 11 | `GLOBAL_ACTION` | guest -> host | `Record{action}` - 1 back, 2 home, 3 recents, 4 notification shade: the host's navigation bar as four buttons |
 
 Design notes that matter:
 
@@ -415,8 +416,13 @@ projection.createVirtualDisplay("GhostHand", w, h, densityDpi,
 * Bitrate comes from `suggestedBitrate(w, h, fps)` - roughly 0.1 bit per pixel per frame,
   clamped to 0.8-16 Mbps. 720p30 lands near 2.8 Mbps, which any decent WiFi link carries with
   room to spare.
-* The encoder is configured with `KEY_I_FRAME_INTERVAL = 2` (a key frame every two seconds, so
-  a guest that connects mid-stream syncs quickly) and `KEY_LATENCY = 1` (no B-frames, no
+* Frame rate is a **host-UI choice**: 15 / 20 / 30, defaulting to **20**. Lower fps means
+  fewer bits into the same WiFi pipe, so queues drain instead of growing - the honest cure
+  for "it lags". `suggestedBitrate()` scales with fps too, so 20 fps also lowers the bitrate
+  automatically. Set once per session from the capture settings dropdown (`EXTRA_FPS`).
+* The encoder is configured with `KEY_I_FRAME_INTERVAL = 1` (a key frame every second, so
+  a guest that connects mid-stream syncs quickly and a dropped frame freezes for at most
+  one second - the keyframe interval *is* the glitch clock) and `KEY_LATENCY = 1` (no B-frames, no
   reordering: latency beats compression for interactive use).
 
 ### 3. Rotation is a restart, not a resize
@@ -799,6 +805,7 @@ The rules it enforces, each born from a bug that happened in practice:
 | ...but a move under **12 px** does **not** move the tap. | Otherwise a shaky press walks the tap across the screen and its duration collapses to 0. The press **anchor** is tracked separately from the trailing point for exactly this reason. |
 | Points are capped at **64** per gesture, evenly sampled. | `dispatchGesture` rejects enormous `Path`s, and a drop is cheaper than a rejection. |
 | Duration is clamped to **40 ms .. 30 s**. | Below the floor a stroke is a mis-tap; above the ceiling the input system refuses it. |
+| Back / home / recents / shade are **buttons**, not swipes (`GLOBAL_ACTION`, type 11). | A letterboxed video almost never reaches the host screen's true edge, so edge gestures cannot be expressed as touches at all - and `performGlobalAction()` is exact where a synthetic swipe is a guess. It needs the same accessibility grant as touch, but not the API-24 gesture path: the buttons work on hosts as old as the service can bind. |
 
 A drag is dispatched on finger **lift**, not continuously. `dispatchGesture` posts a completed
 gesture, so a *live* drag (the host screen following your finger in real time) is not possible
@@ -862,7 +869,7 @@ tested on a plain JVM - no device, no emulator:
 bash toolchain/test.sh app --source 8
 # JUnit version 4.13.2
 # ...............................................................................
-# OK (88 tests)
+# OK (89 tests)
 ```
 
 What is covered:
@@ -919,6 +926,8 @@ phones.
 | `INSTALL_FAILED_OLDER_SDK` on Android 4.4 | you are installing the **debug** APK, which declares minSdk 21 (six dex files, and Dalvik loads one). Use the release APK. |
 | `NoClassDefFoundError` right after installing | usually the multi-dex trap: a `minSdk < 21` APK with a `classes2.dex` is broken on Dalvik. `verify_apk.py` fails the build for exactly this. |
 | Touch does nothing, host is Android 5.0-6.x | injection needs Android 7.0. The host dashboard says so instead of offering the switch. |
+| The Back/Home/Recents/Shade buttons do nothing | the host has not granted the accessibility service - the same "touch control" switch, shown in the host log for every ignored press. |
+| The video lags behind the action | lower the host's frame rate (capture settings: 20, or 15 on a bad link). Fewer frames per second into the same pipe = shallower queues = less end-to-end delay. |
 | `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | you are installing an APK signed with a different key. Every build here uses `keystore/damjay_debug.keystore`; delete the old app once and carry on. |
 | Notification missing on Android 13+ | `POST_NOTIFICATIONS` was denied. The stream still works; only the notification is hidden. |
 | `LambdaMetafactory cannot be resolved` | `toolchain/vendor/core-lambda-stubs.jar` is missing - re-run `bash toolchain/setup.sh`. |
