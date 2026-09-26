@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Dark palette: the same role names as values/colors.xml with night values.
+
+  A mirroring app spends most of its life around a black rectangle, so the dark
+  scheme keeps the original dark-first look: near-black surfaces and a bright green
+  accent. Because values-night only *overrides colour names*, the layouts, drawables
+  and styles are all shared with the light scheme.
+-->
+<resources>
+    <color name="bg">#0E1116</color>
+    <color name="surface">#171C24</color>
+    <color name="surface_alt">#1E242E</color>
+    <color name="surface_variant">#242C36</color>
+    <color name="border">#2A323D</color>
+    <color name="outline">#8B95A1</color>
+
+    <color name="accent">#3DDC97</color>
+    <color name="accent_dim">#1F6E4C</color>
+    <color name="on_accent">#04140D</color>
+    <color name="accent_container">#00513A</color>
+    <color name="on_accent_container">#A7F2DF</color>
+
+    <color name="dot_idle">#5A6672</color>
+    <color name="dot_active">#3DDC97</color>
+    <color name="dot_error">#FF5C5C</color>
+    <color name="warn">#FFB020</color>
+    <color name="error">#FF5C5C</color>
+
+    <color name="text_primary">#E8EDF2</color>
+    <color name="text_secondary">#95A0AD</color>
+
+    <color name="video_background">#000000</color>
+    <color name="video_overlay">#99000000</color>
+</resources>

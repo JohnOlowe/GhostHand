@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Light palette.
+
+  Every colour here is a Material 3 *role* mapped onto our own values: primary,
+  surface, onSurface and friends are what Theme.Material3.DayNight reads, so the
+  whole UI (buttons, switches, cards, text fields) picks the palette up with no
+  per-widget styling. values-night/colors.xml overrides the same names with a dark
+  scheme, which is why DayNight works with zero layout changes.
+-->
+<resources>
+    <!-- surfaces -->
+    <color name="bg">#F5F7F6</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="surface_alt">#E7EBE9</color>
+    <color name="surface_variant">#E1E6E3</color>
+    <color name="border">#CBD3CF</color>
+    <color name="outline">#717977</color>
+
+    <!-- brand / accent -->
+    <color name="accent">#00695C</color>
+    <color name="accent_dim">#9FDDCE</color>
+    <color name="on_accent">#FFFFFF</color>
+    <color name="accent_container">#A7F2DF</color>
+    <color name="on_accent_container">#00201A</color>
+
+    <!-- status -->
+    <color name="dot_idle">#8C9491</color>
+    <color name="dot_active">#1B873F</color>
+    <color name="dot_error">#BA1A1A</color>
+    <color name="warn">#8A5300</color>
+    <color name="error">#BA1A1A</color>
+
+    <!-- text -->
+    <color name="text_primary">#191C1B</color>
+    <color name="text_secondary">#414945</color>
+
+    <!--
+      Splash screen. Deliberately not in values-night/: the splash is the brand moment,
+      and the design is teal-on-mint with the hand as the only bright element. It looks
+      the same in the dark, which is what the mark's contrast was designed for.
+    -->
+    <color name="splash_teal_top">#02685B</color>
+    <color name="splash_teal_bottom">#01584E</color>
+    <color name="splash_glass">#A7F2DF</color>
+
+    <!-- the mirror itself is always black, in both schemes -->
+    <color name="video_background">#000000</color>
+    <color name="video_overlay">#99000000</color>
+</resources>
