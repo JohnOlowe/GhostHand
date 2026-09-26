@@ -132,6 +132,15 @@ androidx_setup() {
     [ -s "$GH_TOOLCHAIN/kotlin-annotations.jar" ] \
       && ANDROIDX_CLASSES="$ANDROIDX_CLASSES:$GH_TOOLCHAIN/kotlin-annotations.jar"
   fi
+  # Shizuku's client API rides the same list on purpose: one variable feeds the
+  # compiler, both dexers and verify_apk's self-containment gate, so the library
+  # cannot be compiled in but dexed out (or vice versa). Vendored, see
+  # toolchain/shizuku/PROVENANCE.md - no network, no Maven, no Gradle.
+  # NOTE: committed in the repo (toolchain/shizuku/), NOT in vendor/ - vendor is
+  # rebuilt from the network on every fresh sandbox, and this must survive that.
+  if [ -n "$ANDROIDX_CLASSES" ] && [ -s "$TC_DIR/shizuku/shizuku.jar" ]; then
+    ANDROIDX_CLASSES="$ANDROIDX_CLASSES:$TC_DIR/shizuku/shizuku.jar"
+  fi
   if [ -d "$ANDROIDX_DIR/res" ]; then
     for z in "$ANDROIDX_DIR"/res/*.zip; do
       [ -s "$z" ] && ANDROIDX_ARGS+=(-R "$z")

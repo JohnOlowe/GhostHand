@@ -92,6 +92,10 @@ public class ScreenCaptureService extends Service
             "damjay.control.ghosthand.action.CLIPBOARD_GET";
     /** Broadcast extra: the guest asked the host screen to rotate (service -> activity). */
     public static final String EXTRA_ROTATE_REQUEST = "rotateRequest";
+    /** Optional composed text for ACTION_CLIPBOARD_PUSH; falls back to the clipboard. */
+    public static final String EXTRA_TEXT = "text";
+    /** Broadcast extra: unpin the host window, follow system rotation (service -> activity). */
+    public static final String EXTRA_UNSPECIFY = "unspecify";
     /** true = mirror the built-in display; false = behave like a second display. */
     public static final String EXTRA_MIRROR_FLAG = "mirrorFlag";
     /**
@@ -233,7 +237,10 @@ public class ScreenCaptureService extends Service
                 log("clipboard push ignored - no guests are connected");
                 return START_NOT_STICKY;
             }
-            String mine = readClipboard();
+            // Compose dialog supplies its own text; the plain button sends the
+            // clipboard. Non-null because the dialog disables Send when blank.
+            String extra = intent.getStringExtra(EXTRA_TEXT);
+            String mine = extra != null ? extra : readClipboard();
             if (mine.isEmpty()) {
                 log("clipboard is empty - nothing to send");
                 return START_NOT_STICKY;
@@ -617,6 +624,7 @@ public class ScreenCaptureService extends Service
      *                       fields, so we must not reset them to IDLE.
      */
     private void stopEverything(String reason, boolean keepErrorState) {
+        restoreSystemRotation(); // put back the user's rotation lock/flag
         Log.i(TAG, "stopEverything: " + reason);
         main.removeCallbacks(statsTick);
         // Drop a half-finished drag: injecting it later would tap some random app.
@@ -804,10 +812,11 @@ public class ScreenCaptureService extends Service
     @Override
     public void onGuestGlobalAction(String clientName, int action) {
         if (action == GhostProtocol.GLOBAL_ROTATE) {
-            // Not an AccessibilityService action - the activity is the only thing
-            // that can turn its own window, so ask it over the state broadcast.
-            Log.i(TAG, "guest " + clientName + " asked for a rotation");
-            broadcastState(null, true);
+            // Not an AccessibilityService action. Two ways to honour it, best first:
+            // shell (system-wide, works over any app) when Shizuku is granted,
+            // otherwise the window flip that only works with GhostHand in front.
+            log("guest " + clientName + " asked for a rotation");
+            rotateSystemOrWindow();
             return;
         }
         if (action < GhostProtocol.GLOBAL_BACK || action > GhostProtocol.GLOBAL_NOTIFICATIONS) {
@@ -838,6 +847,109 @@ public class ScreenCaptureService extends Service
             case GhostProtocol.GLOBAL_NOTIFICATIONS: return "shade";
             default: return "action" + action;
         }
+    }
+
+    // ---------------------------- rotation -----------------------------------
+
+    /**
+     * Best-effort system-wide rotation via Shizuku, falling back to the
+     * window-level flip. Everything here must survive Shizuku being absent:
+     * probe() answers UNAVAILABLE on any failure and we take the old path.
+     */
+    private void rotateSystemOrWindow() {
+        ElevatedShell.State state = ElevatedShell.probe();
+        if (state == ElevatedShell.State.DENIED) {
+            askElevatedPermissionOnce();
+            broadcastState(null, true);
+            return;
+        }
+        if (state != ElevatedShell.State.GRANTED) {
+            broadcastState(null, true);
+            return;
+        }
+        // Flip portrait<->landscape at the system level and remember what was
+        // there so the session can put it back. The `&&` chain makes the exit
+        // code honest: if either write fails we fall back instead of pretending.
+        ElevatedShell.run(
+                "ar=$(settings get system accelerometer_rotation); "
+                        + "ur=$(settings get system user_rotation); "
+                        + "n=1; "
+                        + "if [ \"$ur\" = \"1\" ] || [ \"$ur\" = \"3\" ]; then n=0; fi; "
+                        + "settings put system accelerometer_rotation 0 "
+                        + "&& settings put system user_rotation $n "
+                        + "&& echo \"$ar $ur\"",
+                (exit, out) -> {
+                    if (exit == 0) {
+                        rememberOriginalRotation(out);
+                        // The window may still be pinned by an earlier flip;
+                        // hand it back to the system so both agree.
+                        broadcastUnspecify();
+                        log("rotated system-wide (shizuku)"
+                                + (out.isEmpty() ? "" : ", was: " + out));
+                    } else {
+                        log("shell rotation failed - falling back to window rotation");
+                        broadcastState(null, true);
+                    }
+                });
+    }
+
+    /** One Shizuku permission dialog per install, at the moment it helps. */
+    private void askElevatedPermissionOnce() {
+        android.content.SharedPreferences prefs =
+                getSharedPreferences("ghosthand_rot", MODE_PRIVATE);
+        if (!prefs.getBoolean("asked", false)) {
+            prefs.edit().putBoolean("asked", true).apply();
+            ElevatedShell.requestPermission();
+            log("shizuku is running - grant it to rotate while other apps are in front");
+        } else {
+            log("shizuku permission not granted - rotating GhostHand's own window");
+        }
+    }
+
+    /** Saves the original auto-rotate flag + rotation exactly once per session. */
+    private void rememberOriginalRotation(String stdout) {
+        String[] parts = stdout.trim().split(" ");
+        if (parts.length != 2 || !parts[0].matches("[01]") || !parts[1].matches("[0-3]")) {
+            return; // unusual output: rotation applied, but nothing safe to restore
+        }
+        android.content.SharedPreferences prefs =
+                getSharedPreferences("ghosthand_rot", MODE_PRIVATE);
+        if (!prefs.getBoolean("active", false)) {
+            prefs.edit()
+                    .putString("prev_accel", parts[0])
+                    .putString("prev_user", parts[1])
+                    .putBoolean("active", true)
+                    .apply();
+        }
+    }
+
+    /** Puts the user's rotation settings back when the session ends. */
+    private void restoreSystemRotation() {
+        android.content.SharedPreferences prefs =
+                getSharedPreferences("ghosthand_rot", MODE_PRIVATE);
+        if (!prefs.getBoolean("active", false)) {
+            return;
+        }
+        String accel = prefs.getString("prev_accel", null);
+        String user = prefs.getString("prev_user", null);
+        prefs.edit().remove("active").remove("prev_accel").remove("prev_user").apply();
+        if (accel == null || user == null) {
+            return;
+        }
+        ElevatedShell.run(
+                "settings put system accelerometer_rotation " + accel
+                        + " && settings put system user_rotation " + user,
+                (exit, out) -> Log.i(TAG, "restored rotation settings, exit=" + exit));
+    }
+
+    /** Tells the activity to unpin its window and follow the system rotation. */
+    private void broadcastUnspecify() {
+        Intent intent = new Intent(ACTION_STATE);
+        intent.setPackage(getPackageName());
+        intent.putExtra("state", state);
+        intent.putExtra("mirror", useMirrorFlag);
+        intent.putExtra(EXTRA_UNSPECIFY, true);
+        sendBroadcast(intent);
     }
 
     // ---------------------------- clipboard ----------------------------------

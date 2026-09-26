@@ -2,6 +2,7 @@ package damjay.control.ghosthand;
 
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.os.Build;
 import android.os.Bundle;
@@ -41,6 +42,8 @@ import java.util.List;
 import java.util.Locale;
 
 import damjay.control.ghosthand.guest.GuestController;
+import damjay.control.ghosthand.util.DraggableLayout;
+import damjay.control.ghosthand.util.TextComposer;
 import damjay.control.ghosthand.guest.VideoDecoder;
 import damjay.control.ghosthand.net.GhostProtocol;
 import damjay.control.ghosthand.net.Record;
@@ -115,6 +118,7 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
     private boolean decoderRunning;
     private boolean connected;
     private boolean immersive;
+    private final TextComposer composer = new TextComposer();
 
     // touch throttling
     private long lastTouchSentMs;
@@ -162,6 +166,7 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
         setupControls();
         setupTouchForwarding();
         setupSystemControls();
+        setupControlsDrag();
 
         // The root lays out asynchronously and letterboxing needs real pixel sizes,
         // so re-run the calculation whenever the layout changes.
@@ -522,6 +527,16 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
             controller.requestClipboard();
             appendLog("asked the host for its clipboard");
         });
+        findViewById(R.id.btnClipCompose).setOnClickListener(v -> {
+            if (!connected) {
+                appendLog("connect to a host first - text is sent over the session");
+                return;
+            }
+            composer.open(this, text -> {
+                controller.sendClipboard(text, true);
+                appendLog("clipboard sent to host (" + text.length() + " chars)");
+            });
+        });
     }
 
     /** Current clipboard text, or "" when empty (KitKat-safe, never throws). */
@@ -554,6 +569,35 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
         } catch (RuntimeException e) {
             appendLog("clipboard write failed: " + e.getMessage());
         }
+    }
+
+    /**
+     * The controls pill can be dragged anywhere over the video (it otherwise
+     * sits in the bottom-right and blocks part of the picture). The chosen spot
+     * is stored as screen fractions, so it survives restarts AND rotation -
+     * re-applied on every layout pass, which is also what re-clamps the bar
+     * into view after the guest's own orientation changes.
+     */
+    private void setupControlsDrag() {
+        final DraggableLayout controlsBar = findViewById(R.id.controlsBar);
+        final android.content.SharedPreferences prefs =
+                getSharedPreferences("guest_ui", MODE_PRIVATE);
+        controlsBar.setListener(() -> {
+            float[] f = controlsBar.getPositionFractions();
+            prefs.edit()
+                    .putFloat("controls_fx", f[0])
+                    .putFloat("controls_fy", f[1])
+                    .apply();
+            appendLog("controls moved - drag the bar again to reposition");
+        });
+        controlsBar.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or2, ob) -> {
+            if (v.getVisibility() != View.VISIBLE) {
+                return;
+            }
+            controlsBar.applyPosition(
+                    prefs.getFloat("controls_fx", Float.NaN),
+                    prefs.getFloat("controls_fy", Float.NaN));
+        });
     }
 
     private void setupTouchForwarding() {
@@ -720,6 +764,7 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
             appendLog("host clipboard unavailable (Android 10+ blocks background reads)");
             return;
         }
+        composer.setIncoming(text); // if the compose box is open, show what arrived
         writeClipboard(text);
         appendLog("clipboard updated from host (" + text.length() + " chars)");
     }

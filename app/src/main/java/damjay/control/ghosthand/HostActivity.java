@@ -40,9 +40,11 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
+import damjay.control.ghosthand.host.ElevatedShell;
 import damjay.control.ghosthand.host.HostController;
 import damjay.control.ghosthand.host.InjectionAccessibilityService;
 import damjay.control.ghosthand.host.ScreenCaptureService;
+import damjay.control.ghosthand.util.TextComposer;
 import damjay.control.ghosthand.net.GhostProtocol;
 
 /**
@@ -107,6 +109,7 @@ public class HostActivity extends AppCompatActivity {
      */
     private boolean awaitingReconsent;
     private boolean desiredMirror;
+    private final TextComposer composer = new TextComposer();
     private View dotTouch;
     private TextView txtTouchStatus;
     private MaterialButton btnTouchSettings;
@@ -298,6 +301,18 @@ public class HostActivity extends AppCompatActivity {
                 ScreenCaptureService.ACTION_CLIPBOARD_PUSH));
         findViewById(R.id.btnClipFrom).setOnClickListener(v -> sendClipboardCommand(
                 ScreenCaptureService.ACTION_CLIPBOARD_GET));
+        findViewById(R.id.btnCompose).setOnClickListener(v -> {
+            if (!ScreenCaptureService.isStreaming()) {
+                appendLog("start sharing first - the clipboard needs a live session");
+                return;
+            }
+            composer.open(this, text -> {
+                Intent i = new Intent(this, ScreenCaptureService.class);
+                i.setAction(ScreenCaptureService.ACTION_CLIPBOARD_PUSH);
+                i.putExtra(ScreenCaptureService.EXTRA_TEXT, text);
+                ContextCompat.startForegroundService(this, i);
+            });
+        });
 
         btnTouchSettings.setOnClickListener(v -> {
             // Android deliberately gives no API to enable an accessibility service:
@@ -404,6 +419,21 @@ public class HostActivity extends AppCompatActivity {
     /** @param mirror mode this capture should use; may differ from the switch while a
      *  mode-change consent was in flight (Android 14 re-consent flow). */
     private void startCapture(int resultCode, Intent data, boolean mirror) {
+        // Optional elevation, reported honestly once per session start.
+        switch (ElevatedShell.probe()) {
+            case GRANTED:
+                appendLog("shizuku: granted - guest rotation turns the whole phone,"
+                        + " even with other apps in front");
+                break;
+            case DENIED:
+                appendLog("shizuku: running, not granted - guest rotation stays"
+                        + " window-level (a dialog appears on first rotate)");
+                break;
+            default:
+                appendLog("shizuku: unavailable - guest rotation works while"
+                        + " GhostHand is in front");
+                break;
+        }
         Intent intent = new Intent(this, ScreenCaptureService.class);
         intent.setAction(ScreenCaptureService.ACTION_START);
         intent.putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, resultCode);
@@ -492,6 +522,12 @@ public class HostActivity extends AppCompatActivity {
             // to recreate the virtual display out of nowhere).
             boolean mirror = intent.getBooleanExtra("mirror", true);
             syncMirrorUi(mirror);
+            if (intent.getBooleanExtra(ScreenCaptureService.EXTRA_UNSPECIFY, false)) {
+                // Shizuku rotated the whole system: unpin our window so it agrees
+                // with the new orientation instead of a stale requestedOrientation.
+                setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+                appendLog("following the system rotation");
+            }
             if (intent.getBooleanExtra(ScreenCaptureService.EXTRA_ROTATE_REQUEST, false)) {
                 // Guest-side Rotate button, relayed by the service (it arrives only
                 // while we are started - the service logs it either way).

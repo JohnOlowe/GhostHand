@@ -33,7 +33,7 @@ Package `damjay.control.ghosthand` · **minSdk 19 (Android 4.4)** · targetSdk 3
 ```bash
 git clone https://github.com/JohnOlowe/GhostHand.git
 cd GhostHand
-bash build.sh                 # setup + AndroidX + 93 unit tests + signed APK (~2.5 min cold)
+bash build.sh                 # setup + AndroidX + 98 unit tests + signed APK (~2.5 min cold)
 ```
 
 `build.sh` installs the toolchain into `toolchain/vendor` (JRE, Eclipse compiler, aapt2,
@@ -454,6 +454,15 @@ cannot keep up, and something has to give:
 * The guest has a matching recovery path: when `VideoDecoder` drops a frame it "re-arms" a
   gate and waits for the next IDR before rendering again, so a dropped P-frame can never
   produce a permanently corrupt picture.
+* **The network side needed the same gate, and for a while did not have it** - the bug the
+  screenshots in `screenshots/` caught during rapid scrolling. The protocol has no sequence
+  numbers, so a guest cannot detect that a frame went missing on the way; it just feeds the
+  next P-frame to a decoder whose reference picture never arrived, and gets green block
+  corruption until the next key frame. `ClientConnection` now runs a `FrameGate`: on any
+  drop for a guest (queue overflow, or a control frame evicting a video one) it purges that
+  guest's queued video and suppresses every non-key video frame until the next key frame.
+  The guest freezes on its last good picture for at most one key-frame interval - the
+  glitch clock doing its job - instead of rendering garbage.
 
 ---
 
@@ -523,7 +532,14 @@ it on screen, and taps on it are consumed so they never become touches on the ho
   `setRequestedOrientation(portrait <-> landscape)`. Two honest limits: it only takes effect
   **while GhostHand's window is in front** (it is - only the window showing the stream can
   receive the guest's command at all), and it overrides the system rotation lock for that
-  window only, which is why the in-app "mirror" switch keeps auto-rotation unlocked. The
+  window only, which is why the in-app "mirror" switch keeps auto-rotation unlocked.
+  **With Shizuku granted** the service instead runs `settings put system user_rotation`
+  as the shell user: a system-wide flip that works even when GhostHand is backgrounded
+  (permission is requested once, at the first rotate, and the user's original
+  auto-rotate/lock settings are put back when the session stops). Shizuku needs
+  Android 7+ and adb (USB, or Android 11+ wireless debugging) to start - a KitKat
+  phone can do neither - so it is never a requirement: every path falls back to the
+  window flip. The
   encoder then restarts at the new size (section 3 above), `GEOMETRY` flies out, and the
   guest's panel turns with the host - mid-stream rotation, exactly like the host rotating on
   its own. If the host activity happens to be stopped, the broadcast is missed but the
@@ -537,6 +553,14 @@ it on screen, and taps on it are consumed so they never become touches on the ho
   on the other phone fails honestly instead of pasting nothing over what you had. Text is
   capped at 64 KB, truncated on a UTF-8 character boundary so the other phone never sees a
   replacement character at the cut.
+* **Compose** - the *Compose* button (guest pill) and *Type & send text...* (host card)
+  open a text box prefilled from the local clipboard: edit what you copied, type
+  something new, then Send - the peer copies it automatically, same as a push. A real
+  edit survives closing the dialog; an untouched prefill does not, so the next copied
+  text is never shadowed by a stale draft. Send stays disabled while the box is empty.
+* **Move the bar** - the guest pill can be dragged anywhere over the video (press and
+  drag on it; the buttons still work, a drag only starts past the system touch slop).
+  The spot is stored as screen fractions, so it survives app restarts and rotation.
 
 ---
 
@@ -902,7 +926,7 @@ tested on a plain JVM - no device, no emulator:
 bash toolchain/test.sh app --source 8
 # JUnit version 4.13.2
 # ...............................................................................
-# OK (93 tests)
+# OK (98 tests)
 ```
 
 What is covered:
@@ -930,6 +954,9 @@ What is covered:
 * `ApiLevelsTest` (6 tests) - the version policy at every boundary: 9 is unsupported, 19
   and 20 are guest-only, 21-23 mirror without being controllable, 24 is the first that does
   everything, 24 through 35 all can.
+* `FrameGateTest` (5 tests) - the freeze-vs-corruption switch on the host: after a drop
+  only the next key frame gets through, control frames always pass, repeated drops stay
+  closed, and a dropped key frame cannot "open" the gate by being dropped.
 * `SplashChoreographyTest` (10 tests) - the splash timeline, which is arithmetic rather than
   art: the hand descends monotonically and never dips below the glass except during the
   press, every ripple is born after contact and is finished before the hand is back up,
@@ -968,6 +995,8 @@ phones.
 | The Rotate button does nothing | GhostHand must be the window in front on the host (the command arrives with the stream, so it normally is), and if the activity was stopped the request only shows up in the host log. Rotation lock is overridden only for GhostHand's own window - the in-app mirror switch keeps auto-rotation unlocked for the session. |
 | "Clipboard unavailable (Android 10+ blocks background reads)" | the host answered a pull while its window was in the background - that is the OS policy, and GhostHand fails honestly instead of overwriting your copy. Tap "From host"/"From guest" while the other phone has GhostHand open, or use push ("To host"/"To guest"), which always works. |
 | The video lags behind the action | lower the host's frame rate (capture settings: 20, or 15 on a bad link). Fewer frames per second into the same pipe = shallower queues = less end-to-end delay. |
+| Green blocks / shredded picture while scrolling fast (see `screenshots/`) | was vc8: a network drop left the guest decoding P-frames against a reference it never received. Fixed by the host-side `FrameGate` (freeze up to one key-frame interval instead of corruption). If it returns, check the host's `dropped` counter - and try the 480p preset, because a 2013 guest decoder can also struggle on high-motion 720p. |
+| Guest Rotate does nothing while another app is in front | expected without Shizuku: the window-level flip only works with GhostHand in front. On Android 7+, install Shizuku, start it (wireless debugging on Android 11+, else USB adb - KitKat cannot run Shizuku at all), and grant the dialog GhostHand shows on the first rotate: rotation then becomes system-wide. |
 | `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | you are installing an APK signed with a different key. Every build here uses `keystore/damjay_debug.keystore`; delete the old app once and carry on. |
 | Notification missing on Android 13+ | `POST_NOTIFICATIONS` was denied. The stream still works; only the notification is hidden. |
 | `LambdaMetafactory cannot be resolved` | `toolchain/vendor/core-lambda-stubs.jar` is missing - re-run `bash toolchain/setup.sh`. |

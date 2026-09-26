@@ -80,7 +80,10 @@
          outside this bar still goes to the video, and hence to the host. Visible
          only while connected; immersive mode keeps it on screen, which is exactly
          when it is needed. -->
-    <LinearLayout
+    <!-- Draggable: press and drag anywhere on the pill to move it out of the
+         way of the video; the buttons still work as buttons (drag starts only
+         past the system touch slop). -->
+    <damjay.control.ghosthand.util.DraggableLayout
         android:id="@+id/controlsBar"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
@@ -183,8 +186,19 @@
                 android:paddingRight="8dp"
                 android:text="@string/guest_clip_from_host"
                 android:textSize="12sp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnClipCompose"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="0dp"
+                android:paddingLeft="8dp"
+                android:paddingRight="8dp"
+                android:text="@string/guest_clip_compose"
+                android:textSize="12sp" />
         </LinearLayout>
-    </LinearLayout>
+    </damjay.control.ghosthand.util.DraggableLayout>
 
     <!-- ===================== connect / detail panel ===================== -->
     <com.google.android.material.card.MaterialCardView

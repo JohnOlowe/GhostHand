@@ -29,6 +29,12 @@
     <!-- Keeps the encode/send loop alive if the host screen goes dark. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- Android 11+ package visibility: needed to tell "Shizuku is not installed"
+         apart from "Shizuku is installed but not running" in the host's log. -->
+    <queries>
+        <package android:name="moe.shizuku.privileged.api" />
+    </queries>
+
     <application
         android:allowBackup="false"
         android:hardwareAccelerated="true"
@@ -130,6 +136,25 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
         </service>
+
+        <!-- ======================= SHIZUKU (optional) ==================== -->
+        <!--
+          The binder handshake from the official Shizuku client API - see
+          toolchain/shizuku/PROVENANCE.md. Authorities are applicationId.shizuku,
+          written out because aapt2 (unlike Gradle) does not substitute
+          ${applicationId}. INTERACT_ACROSS_USERS_FULL guards the provider so
+          only privileged callers (the Shizuku server runs as shell/root) can
+          touch it; ordinary apps are stopped at the provider itself.
+          Without Shizuku installed and granted, nothing here activates - the
+          app's rotation falls back to the window-level path every time.
+        -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="damjay.control.ghosthand.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
     </application>
 

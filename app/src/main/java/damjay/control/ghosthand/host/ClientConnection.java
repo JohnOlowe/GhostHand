@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import damjay.control.ghosthand.net.Frame;
 import damjay.control.ghosthand.net.FrameCodec;
+import damjay.control.ghosthand.net.FrameGate;
 import damjay.control.ghosthand.net.GhostProtocol;
 
 /**
@@ -53,6 +54,9 @@ public class ClientConnection {
     private final BlockingQueue<Frame> queue = new ArrayBlockingQueue<>(MAX_QUEUE);
     private final AtomicLong sentBytes = new AtomicLong();
     private final AtomicLong droppedFrames = new AtomicLong();
+    // Freeze-vs-corruption: after any video drop this guest gets no more P-frames
+    // until the next key frame (see FrameGate). Send-side only, no wire change.
+    private final FrameGate gate = new FrameGate();
 
     private OutputStream out;
     private Thread writerThread;
@@ -110,23 +114,53 @@ public class ClientConnection {
         if (!open) {
             return false;
         }
+        boolean isVideo = frame.type == GhostProtocol.TYPE_VIDEO;
+        boolean isKey = isVideo && frame.isKeyframe();
+
+        // A drop already happened: everything but the next key frame would draw
+        // against a picture this guest never received (green block corruption).
+        if (!gate.allow(isVideo, isKey)) {
+            droppedFrames.incrementAndGet();
+            return false;
+        }
+
         if (queue.offer(frame)) {
             return true;
         }
         // Queue full: this guest is slower than the encoder.
-        if (frame.type == GhostProtocol.TYPE_VIDEO) {
+        if (isVideo) {
             droppedFrames.incrementAndGet();
+            gate.onVideoDropped();
+            purgeQueuedVideo();
             return false;
         }
         // Control frames matter more than one more video frame: evict the oldest
-        // video frame and try again.
+        // video frame and try again - and treat that eviction as the drop it is,
+        // purging the rest of the picture so no orphan P-frame can follow the gap.
         Frame head = queue.peek();
         if (head != null && head.type == GhostProtocol.TYPE_VIDEO) {
             queue.poll();
             droppedFrames.incrementAndGet();
+            gate.onVideoDropped();
+            purgeQueuedVideo();
             return queue.offer(frame);
         }
         return false;
+    }
+
+    /**
+     * Removes every queued VIDEO frame (control frames stay). After a drop the
+     * queued tail is either older than the gap (useless now) or would start with
+     * an orphan P-frame; clearing it resets latency and guarantees the next thing
+     * this guest receives is the key frame that re-syncs it.
+     */
+    private void purgeQueuedVideo() {
+        java.util.Iterator<Frame> it = queue.iterator();
+        while (it.hasNext()) {
+            if (it.next().type == GhostProtocol.TYPE_VIDEO) {
+                it.remove();
+            }
+        }
     }
 
     private void writeLoop() {
