@@ -1,5 +1,7 @@
 package damjay.control.ghosthand;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.pm.ActivityInfo;
 import android.os.Build;
 import android.os.Bundle;
@@ -14,6 +16,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
@@ -499,6 +502,58 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
                 controller.sendGlobalAction(GhostProtocol.GLOBAL_RECENTS));
         findViewById(R.id.btnNavShade).setOnClickListener(v ->
                 controller.sendGlobalAction(GhostProtocol.GLOBAL_NOTIFICATIONS));
+        findViewById(R.id.btnNavRotate).setOnClickListener(v -> {
+            // Not an AccessibilityService action - a GhostHand command (100+) that
+            // makes the host flip its own screen. The host's log records it even if
+            // its activity is stopped and misses the broadcast.
+            controller.sendGlobalAction(GhostProtocol.GLOBAL_ROTATE);
+            appendLog("asked the host to rotate");
+        });
+        findViewById(R.id.btnClipToHost).setOnClickListener(v -> {
+            String mine = readClipboard();
+            if (mine.isEmpty()) {
+                appendLog("clipboard is empty - nothing to send");
+                return;
+            }
+            controller.sendClipboard(mine, true);
+            appendLog("clipboard sent to host (" + mine.length() + " chars)");
+        });
+        findViewById(R.id.btnClipFromHost).setOnClickListener(v -> {
+            controller.requestClipboard();
+            appendLog("asked the host for its clipboard");
+        });
+    }
+
+    /** Current clipboard text, or "" when empty (KitKat-safe, never throws). */
+    private String readClipboard() {
+        try {
+            ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            ClipData data = cm == null ? null : cm.getPrimaryClip();
+            if (data != null && data.getItemCount() > 0) {
+                CharSequence text = data.getItemAt(0).coerceToText(this);
+                if (text != null) {
+                    return text.toString();
+                }
+            }
+        } catch (RuntimeException e) {
+            appendLog("clipboard read failed: " + e.getMessage());
+        }
+        return "";
+    }
+
+    /** Replaces this device's clipboard - the auto-copy on arrival. */
+    private void writeClipboard(String text) {
+        try {
+            ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (cm != null) {
+                cm.setPrimaryClip(ClipData.newPlainText("ghosthand", text));
+                Toast.makeText(this,
+                        getString(R.string.clipboard_updated, text.length()),
+                        Toast.LENGTH_SHORT).show();
+            }
+        } catch (RuntimeException e) {
+            appendLog("clipboard write failed: " + e.getMessage());
+        }
     }
 
     private void setupTouchForwarding() {
@@ -640,6 +695,33 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
         connected = false;
         stopDecoder(reason);
         renderIdle();
+    }
+
+    @Override
+    public void onClipboardRequest() {
+        // The host pressed "From guest": answer from the UI thread, where reading
+        // the clipboard is allowed (including on KitKat).
+        String mine = readClipboard();
+        boolean ok = !mine.isEmpty();
+        controller.sendClipboard(mine, ok);
+        if (ok) {
+            appendLog("sent clipboard to host (" + mine.length() + " chars)");
+        } else {
+            appendLog("clipboard is empty - told the host");
+        }
+    }
+
+    @Override
+    public void onPeerClipboard(String text, boolean ok) {
+        // Either the answer to a pull or a push from the host. ok=false means the
+        // host could not read ITS clipboard (Android 10+ blocks background reads) -
+        // never overwrite ours with that.
+        if (!ok || text.isEmpty()) {
+            appendLog("host clipboard unavailable (Android 10+ blocks background reads)");
+            return;
+        }
+        writeClipboard(text);
+        appendLog("clipboard updated from host (" + text.length() + " chars)");
     }
 
     // --------------------------------------------------------------------------

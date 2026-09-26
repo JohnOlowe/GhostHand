@@ -5,6 +5,8 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
@@ -16,6 +18,7 @@ import android.media.projection.MediaProjectionManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
+import android.widget.Toast;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.os.SystemClock;
@@ -82,6 +85,13 @@ public class ScreenCaptureService extends Service
     public static final String EXTRA_MAX_SIDE = "maxSide";
     /** Capture frame rate for the session (the host UI's FPS dropdown). */
     public static final String EXTRA_FPS = "fps";
+    /** HostActivity -> service: push my clipboard to every guest / pull from them. */
+    public static final String ACTION_CLIPBOARD_PUSH =
+            "damjay.control.ghosthand.action.CLIPBOARD_PUSH";
+    public static final String ACTION_CLIPBOARD_GET =
+            "damjay.control.ghosthand.action.CLIPBOARD_GET";
+    /** Broadcast extra: the guest asked the host screen to rotate (service -> activity). */
+    public static final String EXTRA_ROTATE_REQUEST = "rotateRequest";
     /** true = mirror the built-in display; false = behave like a second display. */
     public static final String EXTRA_MIRROR_FLAG = "mirrorFlag";
     /**
@@ -211,6 +221,37 @@ public class ScreenCaptureService extends Service
                     log("capture mode: " + (mirror ? "AUTO_MIRROR" : "PUBLIC (second display)"));
                 }
             }
+            return START_NOT_STICKY;
+        }
+
+        if (ACTION_CLIPBOARD_PUSH.equals(action)) {
+            // Host UI pressed "To guest": read OUR clipboard and hand it to every
+            // guest. Reading here is legal because the button lives in the host
+            // activity, which is in the foreground - Android 10+ refuses background
+            // clipboard reads, and that limitation is answered honestly (ok=0).
+            if (hub == null || !hub.isRunning()) {
+                log("clipboard push ignored - no guests are connected");
+                return START_NOT_STICKY;
+            }
+            String mine = readClipboard();
+            if (mine.isEmpty()) {
+                log("clipboard is empty - nothing to send");
+                return START_NOT_STICKY;
+            }
+            hub.clipboardSet(mine, true);
+            log("clipboard sent to guests (" + mine.length() + " chars)");
+            return START_NOT_STICKY;
+        }
+
+        if (ACTION_CLIPBOARD_GET.equals(action)) {
+            // Host UI pressed "From guest": every guest answers with its own
+            // clipboard; the last answer wins, each one is logged.
+            if (hub == null || !hub.isRunning()) {
+                log("clipboard pull ignored - no guests are connected");
+                return START_NOT_STICKY;
+            }
+            hub.clipboardGet();
+            log("asked guests for their clipboard");
             return START_NOT_STICKY;
         }
 
@@ -762,6 +803,13 @@ public class ScreenCaptureService extends Service
      */
     @Override
     public void onGuestGlobalAction(String clientName, int action) {
+        if (action == GhostProtocol.GLOBAL_ROTATE) {
+            // Not an AccessibilityService action - the activity is the only thing
+            // that can turn its own window, so ask it over the state broadcast.
+            Log.i(TAG, "guest " + clientName + " asked for a rotation");
+            broadcastState(null, true);
+            return;
+        }
         if (action < GhostProtocol.GLOBAL_BACK || action > GhostProtocol.GLOBAL_NOTIFICATIONS) {
             log("nav action " + action + " from " + clientName + " ignored - out of range");
             return;
@@ -789,6 +837,70 @@ public class ScreenCaptureService extends Service
             case GhostProtocol.GLOBAL_RECENTS: return "recents";
             case GhostProtocol.GLOBAL_NOTIFICATIONS: return "shade";
             default: return "action" + action;
+        }
+    }
+
+    // ---------------------------- clipboard ----------------------------------
+
+    @Override
+    public void onGuestClipboardGet(final ClientConnection from) {
+        // A guest pressed "From host". Reading may fail on Android 10+ while our
+        // window is not in front - then we say so (ok=0) instead of letting the
+        // guest silently overwrite its own clipboard with an empty string.
+        main.post(() -> {
+            String mine = readClipboard();
+            boolean ok = !mine.isEmpty();
+            from.send(ClientHub.buildClipboardSetFrame(mine, ok));
+            if (ok) {
+                log("sent clipboard to " + from.getName() + " (" + mine.length() + " chars)");
+            } else {
+                log("clipboard unavailable here (Android 10+ blocks background reads) - told " + from.getName());
+            }
+        });
+    }
+
+    @Override
+    public void onGuestClipboardSet(final ClientConnection from, final String text, final boolean ok) {
+        // Either a push from the guest or our own request being answered.
+        main.post(() -> {
+            if (!ok || text.isEmpty()) {
+                log(from.getName() + " could not read its clipboard");
+                return;
+            }
+            writeClipboard(text);
+            log("clipboard updated from " + from.getName() + " (" + text.length() + " chars)");
+        });
+    }
+
+    /** Current clipboard text, or "" when empty/unreadable (never throws). */
+    private String readClipboard() {
+        try {
+            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            ClipData data = cm == null ? null : cm.getPrimaryClip();
+            if (data != null && data.getItemCount() > 0) {
+                CharSequence text = data.getItemAt(0).coerceToText(this);
+                if (text != null) {
+                    return text.toString();
+                }
+            }
+        } catch (RuntimeException e) {
+            Log.w(TAG, "clipboard read failed: " + e.getMessage());
+        }
+        return "";
+    }
+
+    /** Replaces the clipboard and tells whoever is holding the phone. */
+    private void writeClipboard(String text) {
+        try {
+            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm != null) {
+                cm.setPrimaryClip(ClipData.newPlainText("ghosthand", text));
+                Toast.makeText(this,
+                        getString(R.string.clipboard_updated, text.length()),
+                        Toast.LENGTH_SHORT).show();
+            }
+        } catch (RuntimeException e) {
+            Log.w(TAG, "clipboard write failed: " + e.getMessage());
         }
     }
 
@@ -910,7 +1022,11 @@ public class ScreenCaptureService extends Service
     // --------------------------------- helpers --------------------------------
 
     private void broadcastState() {
-        broadcastState(null);
+        broadcastState(null, false);
+    }
+
+    private void broadcastState(String reconsentMessage) {
+        broadcastState(reconsentMessage, false);
     }
 
     /**
@@ -918,8 +1034,12 @@ public class ScreenCaptureService extends Service
      *        consent dialog (Android 14 one-capture-per-grant rule); the text is
      *        appended to its log. "mirror" still carries the LIVE mode - the requested
      *        one is not active until ACTION_START brings the fresh grant.
+     * @param rotateRequest true asks the activity to flip its own window between
+     *        portrait and landscape (the guest's Rotate button). It reaches the
+     *        activity only while it is started; a stopped activity simply misses it,
+     *        which the log line already told the guest.
      */
-    private void broadcastState(String reconsentMessage) {
+    private void broadcastState(String reconsentMessage, boolean rotateRequest) {
         Intent intent = new Intent(ACTION_STATE);
         intent.setPackage(getPackageName());
         intent.putExtra("state", state);
@@ -931,6 +1051,11 @@ public class ScreenCaptureService extends Service
         if (reconsentMessage != null) {
             intent.putExtra(EXTRA_RECONSENT, true);
             intent.putExtra("message", reconsentMessage);
+        }
+        if (rotateRequest) {
+            // No "message" extra: flipRequestedOrientation() logs its own line in
+            // the activity, and a second one would only add noise.
+            intent.putExtra(EXTRA_ROTATE_REQUEST, true);
         }
         sendBroadcast(intent);
     }

@@ -33,7 +33,7 @@ Package `damjay.control.ghosthand` · **minSdk 19 (Android 4.4)** · targetSdk 3
 ```bash
 git clone https://github.com/JohnOlowe/GhostHand.git
 cd GhostHand
-bash build.sh                 # setup + AndroidX + 89 unit tests + signed APK (~2.5 min cold)
+bash build.sh                 # setup + AndroidX + 93 unit tests + signed APK (~2.5 min cold)
 ```
 
 `build.sh` installs the toolchain into `toolchain/vendor` (JRE, Eclipse compiler, aapt2,
@@ -336,7 +336,9 @@ what `DataInputStream` and `ByteBuffer` do by default.
 | 8 | `GEOMETRY` | host -> guest | `Record{w, h, rotation}` after a rotate/resize |
 | 9 | `STATS` | host -> guest | `Record{fps, kbps, dropped, clients, uptimeMs}` |
 | 10 | `BYE` | either | UTF-8 reason |
-| 11 | `GLOBAL_ACTION` | guest -> host | `Record{action}` - 1 back, 2 home, 3 recents, 4 notification shade: the host's navigation bar as four buttons |
+| 11 | `GLOBAL_ACTION` | guest -> host | `Record{action}` - 1 back, 2 home, 3 recents, 4 notification shade: the host's navigation bar as four buttons. Code **100** is GhostHand's own `rotate` command: outside AccessibilityService's 1..5 (5 there = quick settings), so it can never be handed to `performGlobalAction` by accident |
+| 12 | `CLIPBOARD_GET` | either | empty payload - "give me your clipboard"; answered with one `CLIPBOARD_SET` |
+| 13 | `CLIPBOARD_SET` | either | `Record{text, ok}` - `ok = 0` means "I could not read mine" and must never overwrite the receiver's copy; `text` is UTF-8 capped at 64 KB (`clipText()` truncates on a character boundary) |
 
 Design notes that matter:
 
@@ -504,6 +506,37 @@ and the round-trip time is shown in the UI. The socket is set to a 1-second read
 the reader thread wakes up regularly: if **20 seconds** pass with no traffic in either
 direction, the guest declares the link dead and closes it, rather than showing a frozen last
 frame forever.
+
+### 4. Controls: navigation, rotation and the clipboard bridge
+
+While connected, a two-row pill sits over the bottom-right of the video (immersive mode keeps
+it on screen, and taps on it are consumed so they never become touches on the host):
+
+* **Back / Home / Recents / Shade** - each sends `GLOBAL_ACTION` with the matching
+  `AccessibilityService.GLOBAL_ACTION_*` number; the host's service calls
+  `performGlobalAction()`, which exists since API 16 and does **not** need `dispatchGesture`.
+  The accessibility service must be granted (the dashboard's "touch control" switch), and
+  every ignored press says so in the host log.
+* **Rotate** - sends the GhostHand command `GLOBAL_ROTATE = 100`. There is no API that turns
+  the display itself and `GLOBAL_ACTION` has no rotate constant, so the service logs the
+  request and broadcasts it to `HostActivity`, which flips its own window with
+  `setRequestedOrientation(portrait <-> landscape)`. Two honest limits: it only takes effect
+  **while GhostHand's window is in front** (it is - only the window showing the stream can
+  receive the guest's command at all), and it overrides the system rotation lock for that
+  window only, which is why the in-app "mirror" switch keeps auto-rotation unlocked. The
+  encoder then restarts at the new size (section 3 above), `GEOMETRY` flies out, and the
+  guest's panel turns with the host - mid-stream rotation, exactly like the host rotating on
+  its own. If the host activity happens to be stopped, the broadcast is missed but the
+  service's log line still records the request.
+* **To host / From host** (guest) and **To guest / From guest** (host, in the capture
+  settings card; both need a live session) - the clipboard bridge. Push = read my clipboard,
+  send `CLIPBOARD_SET`, the peer copies it automatically (toast on arrival). Pull = send
+  `CLIPBOARD_GET`, the peer answers with its own `CLIPBOARD_SET`. Guards: an empty clipboard
+  is never sent, and an `ok = 0` answer never overwrites the local copy - on **Android 10+
+  the OS blocks clipboard reads for background apps**, so a pull answered while GhostHand is
+  on the other phone fails honestly instead of pasting nothing over what you had. Text is
+  capped at 64 KB, truncated on a UTF-8 character boundary so the other phone never sees a
+  replacement character at the cut.
 
 ---
 
@@ -869,7 +902,7 @@ tested on a plain JVM - no device, no emulator:
 bash toolchain/test.sh app --source 8
 # JUnit version 4.13.2
 # ...............................................................................
-# OK (89 tests)
+# OK (93 tests)
 ```
 
 What is covered:
@@ -877,13 +910,18 @@ What is covered:
 * `FrameCodecTest` - round-trip of every header field, negative and large PTS, empty payloads,
   **a frame delivered one byte at a time**, three frames coalesced into a single read, a frame
   split inside the header, foreign bytes on the port, an unsupported version, an absurd payload
-  length, truncated input, `reset()`.
+  length, truncated input, `reset()`, plus the clipboard frames - an empty `CLIPBOARD_GET`
+  and a `CLIPBOARD_SET` carrying a full 64 KB record - arriving byte-perfect.
 * `RecordTest` - every value type, nested records, missing keys, wrong-type lookups, full `long`
   range, **byte arrays with embedded zeros and 0xFF** (SPS/PPS are full of both), UTF-8 beyond
   ASCII, truncated blobs.
 * `GhostProtocolTest` - sizing maths (16-alignment for any screen/preset combination, aspect
   preservation, no upscaling, encoder minimums), bitrate clamp, and that header size, port,
-  service type and type numbers stay sane and distinct.
+  service type and type numbers stay sane and distinct; that `GLOBAL_ROTATE` sits outside
+  AccessibilityService's 1..5 range; and that `clipText()` passes ordinary text through,
+  truncates ASCII exactly at the cap, and never splits a multi-byte character (the raw cut
+  lands inside a 3-byte `EUR` - the boundary back-off is what keeps U+FFFD off the other
+  phone's clipboard).
 * `TouchInjectorTest` (23 tests) - tap and drag planning, the slop rules (a sub-12 px wobble
   during a press must **not** move the tap or shorten its duration - a real bug this caught),
   the 40 ms/30 s duration clamps, monotonic non-decreasing offsets, point reduction past 64,
@@ -927,6 +965,8 @@ phones.
 | `NoClassDefFoundError` right after installing | usually the multi-dex trap: a `minSdk < 21` APK with a `classes2.dex` is broken on Dalvik. `verify_apk.py` fails the build for exactly this. |
 | Touch does nothing, host is Android 5.0-6.x | injection needs Android 7.0. The host dashboard says so instead of offering the switch. |
 | The Back/Home/Recents/Shade buttons do nothing | the host has not granted the accessibility service - the same "touch control" switch, shown in the host log for every ignored press. |
+| The Rotate button does nothing | GhostHand must be the window in front on the host (the command arrives with the stream, so it normally is), and if the activity was stopped the request only shows up in the host log. Rotation lock is overridden only for GhostHand's own window - the in-app mirror switch keeps auto-rotation unlocked for the session. |
+| "Clipboard unavailable (Android 10+ blocks background reads)" | the host answered a pull while its window was in the background - that is the OS policy, and GhostHand fails honestly instead of overwriting your copy. Tap "From host"/"From guest" while the other phone has GhostHand open, or use push ("To host"/"To guest"), which always works. |
 | The video lags behind the action | lower the host's frame rate (capture settings: 20, or 15 on a bad link). Fewer frames per second into the same pipe = shallower queues = less end-to-end delay. |
 | `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | you are installing an APK signed with a different key. Every build here uses `keystore/damjay_debug.keystore`; delete the old app once and carry on. |
 | Notification missing on Android 13+ | `POST_NOTIFICATIONS` was denied. The stream still works; only the notification is hidden. |

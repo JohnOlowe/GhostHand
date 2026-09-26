@@ -70,6 +70,15 @@ public class ClientHub implements ClientConnection.Listener {
          * platform requires, exactly like {@link #onGuestTouch}.
          */
         void onGuestGlobalAction(String clientName, int action);
+
+        /**
+         * The guest asked for the host's clipboard (its "From guest" pull). Reader
+         * thread; the implementation replies through {@code from.send(...)}.
+         */
+        void onGuestClipboardGet(ClientConnection from);
+
+        /** The guest pushed text for the host's clipboard, or answered a request. */
+        void onGuestClipboardSet(ClientConnection from, String text, boolean ok);
     }
 
     private final int port;
@@ -242,6 +251,32 @@ public class ClientHub implements ClientConnection.Listener {
         broadcast(buildVideoConfigFrame(config));
     }
 
+    /** Frame that asks every connected guest for its clipboard. */
+    public static Frame buildClipboardGetFrame() {
+        return new Frame(GhostProtocol.TYPE_CLIPBOARD_GET, (byte) 0, 0L, new byte[0]);
+    }
+
+    /**
+     * Frame carrying text for the peer's clipboard. {@code ok = false} is the honest
+     * "could not read mine" answer and must never overwrite the receiver's copy.
+     */
+    public static Frame buildClipboardSetFrame(String text, boolean ok) {
+        Record r = Record.create()
+                .putString("text", ok ? GhostProtocol.clipText(text) : "")
+                .putInt("ok", ok ? 1 : 0);
+        return new Frame(GhostProtocol.TYPE_CLIPBOARD_SET, (byte) 0, 0L, r.toBytes());
+    }
+
+    /** Ask every guest for its clipboard. */
+    public void clipboardGet() {
+        broadcast(buildClipboardGetFrame());
+    }
+
+    /** Push text to every guest's clipboard. */
+    public void clipboardSet(String text, boolean ok) {
+        broadcast(buildClipboardSetFrame(text, ok));
+    }
+
     /** Builds the VIDEO_CONFIG frame from an Annex-B SPS+PPS blob. */
     public static Frame buildVideoConfigFrame(byte[] annexBConfig) {
         List<byte[]> nals = ScreenEncoder.splitStartCodes(annexBConfig);
@@ -318,6 +353,22 @@ public class ClientHub implements ClientConnection.Listener {
                 }
                 l.onGuestGlobalAction(connection.getName(),
                         (int) g.getInt("action", 0));
+                break;
+            }
+            case GhostProtocol.TYPE_CLIPBOARD_GET: {
+                Listener l = listener;
+                if (l != null) {
+                    l.onGuestClipboardGet(connection);
+                }
+                break;
+            }
+            case GhostProtocol.TYPE_CLIPBOARD_SET: {
+                Record c = frame.asRecord();
+                Listener l = listener;
+                if (l != null) {
+                    l.onGuestClipboardSet(connection,
+                            c.getString("text", ""), c.getInt("ok", 0) != 0);
+                }
                 break;
             }
             case GhostProtocol.TYPE_BYE:

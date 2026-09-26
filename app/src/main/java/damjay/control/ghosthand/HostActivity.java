@@ -6,6 +6,8 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.content.res.Configuration;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.media.projection.MediaProjectionManager;
@@ -292,6 +294,11 @@ public class HostActivity extends AppCompatActivity {
 
         swMirror.setOnCheckedChangeListener(this::onMirrorToggled);
 
+        findViewById(R.id.btnClipPush).setOnClickListener(v -> sendClipboardCommand(
+                ScreenCaptureService.ACTION_CLIPBOARD_PUSH));
+        findViewById(R.id.btnClipFrom).setOnClickListener(v -> sendClipboardCommand(
+                ScreenCaptureService.ACTION_CLIPBOARD_GET));
+
         btnTouchSettings.setOnClickListener(v -> {
             // Android deliberately gives no API to enable an accessibility service:
             // only the user, in Settings, can grant this. So all we can do is open
@@ -312,6 +319,41 @@ public class HostActivity extends AppCompatActivity {
      * MaterialSwitch is a {@code SwitchCompat}, so the label doubles as the
      * explanation for the two capture modes.
      */
+    /**
+     * Sends a short-lived clipboard command to the running capture service - the
+     * same startForegroundService pattern as SET_MODE (fewer than 20 such starts
+     * per 30 s, so the Android 14 quota cannot complain). The activity itself
+     * never touches the system clipboard here: a foreground Service is the context
+     * that can still answer a guest's request while this activity is stopped.
+     */
+    private void sendClipboardCommand(String action) {
+        if (!ScreenCaptureService.isStreaming()) {
+            appendLog("start sharing first - the clipboard needs a live session");
+            return;
+        }
+        Intent i = new Intent(this, ScreenCaptureService.class);
+        i.setAction(action);
+        ContextCompat.startForegroundService(this, i);
+    }
+
+    /**
+     * The guest pressed Rotate: flip portrait <-> landscape. setRequestedOrientation
+     * is the only app-side way to turn a screen (no API flips the display itself),
+     * and it only takes effect while THIS window is in front - which it is, because
+     * only the window showing the stream can receive the guest's command. The
+     * encoder then reconfigures, the GEOMETRY frame flies out, and the guest's
+     * video panel turns with us; the in-app "mirror" switch keeps auto-rotation
+     * unlocked so the flip is never fought by rotation lock.
+     */
+    private void flipRequestedOrientation() {
+        int portrait = getResources().getConfiguration().orientation
+                == Configuration.ORIENTATION_PORTRAIT
+                ? ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                : ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+        setRequestedOrientation(portrait);
+        appendLog("guest asked for rotation -> switched orientation");
+    }
+
     private void onMirrorToggled(android.widget.CompoundButton button, boolean checked) {
         button.setText(checked ? R.string.host_mode_mirror : R.string.host_mode_public);
         if (ScreenCaptureService.isStreaming()) {
@@ -450,6 +492,11 @@ public class HostActivity extends AppCompatActivity {
             // to recreate the virtual display out of nowhere).
             boolean mirror = intent.getBooleanExtra("mirror", true);
             syncMirrorUi(mirror);
+            if (intent.getBooleanExtra(ScreenCaptureService.EXTRA_ROTATE_REQUEST, false)) {
+                // Guest-side Rotate button, relayed by the service (it arrives only
+                // while we are started - the service logs it either way).
+                flipRequestedOrientation();
+            }
             if (intent.getBooleanExtra(ScreenCaptureService.EXTRA_RECONSENT, false)
                     && !awaitingReconsent) {
                 awaitingReconsent = true;

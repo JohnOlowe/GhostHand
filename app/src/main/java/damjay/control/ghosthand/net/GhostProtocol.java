@@ -82,6 +82,10 @@ public final class GhostProtocol {
     public static final byte TYPE_BYE = 10;
     /** Guest -> host: perform a system navigation action. Record{action}, see GLOBAL_*. */
     public static final byte TYPE_GLOBAL_ACTION = 11;
+    /** Either direction: "give me your clipboard". Empty payload; answer is a SET. */
+    public static final byte TYPE_CLIPBOARD_GET = 12;
+    /** Either direction: "set your clipboard to this". Record{text, ok}. */
+    public static final byte TYPE_CLIPBOARD_SET = 13;
 
     // Wire codes for TYPE_GLOBAL_ACTION. They deliberately equal
     // AccessibilityService.GLOBAL_ACTION_* on every platform this app hosts on
@@ -95,6 +99,61 @@ public final class GhostProtocol {
     public static final int GLOBAL_RECENTS = 3;
     /** The notification shade - the "swipe down from the top" gesture as a button. */
     public static final int GLOBAL_NOTIFICATIONS = 4;
+    /**
+     * GhostHand command inside {@link #TYPE_GLOBAL_ACTION}: flip the host screen
+     * portrait/landscape. Deliberately outside the 1..5 range of
+     * AccessibilityService.GLOBAL_ACTION_* so it can never be mistaken for one
+     * (5 is QUICK_SETTINGS there) - commands live at 100+.
+     */
+    public static final int GLOBAL_ROTATE = 100;
+
+    /**
+     * Clipboard text crossing the wire is capped far below {@link #MAX_PAYLOAD}:
+     * a clipboard is for text, not for megabyte blobs, and one huge paste should
+     * not turn into a multi-second stall on a live video socket.
+     */
+    public static final int CLIP_MAX_BYTES = 64 * 1024;
+
+    /**
+     * UTF-8 encodes {@code text} for the wire, truncated to {@link #CLIP_MAX_BYTES}
+     * <b>on a codepoint boundary</b>: the cut lands so the first <em>dropped</em>
+     * byte is never a UTF-8 continuation (10xxxxxx), which would otherwise chop a
+     * multi-byte character in half and put U+FFFD on the peer's clipboard.
+     */
+    public static byte[] clipBytes(String text) {
+        if (text == null || text.isEmpty()) {
+            return new byte[0];
+        }
+        byte[] raw;
+        try {
+            raw = text.getBytes("UTF-8");
+        } catch (java.io.UnsupportedEncodingException e) {
+            return new byte[0]; // UTF-8 exists on every JVM
+        }
+        if (raw.length <= CLIP_MAX_BYTES) {
+            return raw;
+        }
+        int cut = CLIP_MAX_BYTES;
+        while (cut > 0 && (raw[cut] & 0xC0) == 0x80) {
+            cut--;
+        }
+        byte[] out = new byte[cut];
+        System.arraycopy(raw, 0, out, 0, cut);
+        return out;
+    }
+
+    /** {@link #clipBytes} as a String - what the clipboard setters actually want. */
+    public static String clipText(String text) {
+        byte[] bytes = clipBytes(text);
+        if (bytes.length == 0) {
+            return text == null ? "" : text;
+        }
+        try {
+            return new String(bytes, "UTF-8");
+        } catch (java.io.UnsupportedEncodingException e) {
+            return "";
+        }
+    }
 
     /** flags bit 0: this VIDEO frame is an IDR (a guest can start decoding here). */
     public static final byte FLAG_KEYFRAME = 1;
@@ -117,6 +176,8 @@ public final class GhostProtocol {
             case TYPE_STATS: return "STATS";
             case TYPE_BYE: return "BYE";
             case TYPE_GLOBAL_ACTION: return "GLOBAL_ACTION";
+            case TYPE_CLIPBOARD_GET: return "CLIPBOARD_GET";
+            case TYPE_CLIPBOARD_SET: return "CLIPBOARD_SET";
             default: return "UNKNOWN(" + type + ")";
         }
     }

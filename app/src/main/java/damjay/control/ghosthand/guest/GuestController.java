@@ -115,6 +115,20 @@ public class GuestController {
         void onLatency(long millis);
 
         void onDisconnected(String reason);
+
+        /**
+         * The host asked for our clipboard (its "From guest" button). Read the local
+         * clipboard and answer with {@link GuestController#sendClipboard}. Main thread.
+         */
+        void onClipboardRequest();
+
+        /**
+         * Clipboard text arrived from the host - either the answer to a pull or a
+         * push the host initiated. {@code ok = false} means the host could not read
+         * ITS clipboard (Android 10+ blocks background reads); the local clipboard
+         * must not be touched in that case. Main thread.
+         */
+        void onPeerClipboard(String text, boolean ok);
     }
 
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -426,6 +440,19 @@ public class GuestController {
                         frame.isKeyframe(), frame.ptsUs);
                 countFrame();
                 break;
+            case GhostProtocol.TYPE_CLIPBOARD_GET:
+                // The host wants our clipboard. Protocol code never touches the
+                // system clipboard itself - the activity reads it and answers via
+                // sendClipboard(), on the thread that owns UI services.
+                main.post(listener::onClipboardRequest);
+                break;
+            case GhostProtocol.TYPE_CLIPBOARD_SET: {
+                Record c = frame.asRecord();
+                final String text = c.getString("text", "");
+                final boolean ok = c.getInt("ok", 0) != 0;
+                main.post(() -> listener.onPeerClipboard(text, ok));
+                break;
+            }
             case GhostProtocol.TYPE_GEOMETRY: {
                 Record g = frame.asRecord();
                 streamWidth = (int) g.getInt("w", streamWidth);
@@ -498,6 +525,27 @@ public class GuestController {
     public void sendGlobalAction(int action) {
         Record r = Record.create().putInt("action", action);
         sendFrame(new Frame(GhostProtocol.TYPE_GLOBAL_ACTION, (byte) 0, 0L, r.toBytes()));
+    }
+
+    /**
+     * Pull: ask the host for its clipboard. The host replies with one
+     * {@link GhostProtocol#TYPE_CLIPBOARD_SET} frame, which lands in
+     * {@link Listener#onPeerClipboard}.
+     */
+    public void requestClipboard() {
+        sendFrame(new Frame(GhostProtocol.TYPE_CLIPBOARD_GET, (byte) 0, 0L, new byte[0]));
+    }
+
+    /**
+     * Push: hand the peer text to copy. Used both for "send mine to the host" and
+     * for answering the host's request. Empty text with {@code ok = false} means
+     * "I could not read my clipboard" and never overwrites the peer's copy.
+     */
+    public void sendClipboard(String text, boolean ok) {
+        Record r = Record.create()
+                .putString("text", ok ? GhostProtocol.clipText(text) : "")
+                .putInt("ok", ok ? 1 : 0);
+        sendFrame(new Frame(GhostProtocol.TYPE_CLIPBOARD_SET, (byte) 0, 0L, r.toBytes()));
     }
 
     private void sendFrame(Frame frame) {

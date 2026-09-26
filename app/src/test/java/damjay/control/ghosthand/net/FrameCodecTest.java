@@ -104,6 +104,36 @@ public class FrameCodecTest {
     }
 
     @Test
+    public void clipboardFramesSurviveTheWire() throws IOException {
+        // CLIPBOARD_GET travels with an empty payload, CLIPBOARD_SET with a full
+        // 64 KB text record - both must arrive byte-perfect, or the other phone
+        // silently gets a different paste than the user copied.
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        FrameCodec.write(out, new Frame(GhostProtocol.TYPE_CLIPBOARD_GET, (byte) 0, 0L, new byte[0]));
+
+        StringBuilder big = new StringBuilder();
+        while (big.length() < GhostProtocol.CLIP_MAX_BYTES - 16) {
+            big.append("line of text\n");
+        }
+        Record r = Record.create().putString("text", big.toString()).putInt("ok", 1);
+        FrameCodec.write(out, new Frame(GhostProtocol.TYPE_CLIPBOARD_SET, (byte) 0, 0L, r.toBytes()));
+
+        ByteArrayInputStream in = new ByteArrayInputStream(out.toByteArray());
+        Frame get = FrameCodec.readFully(in);
+        assertNotNull(get);
+        assertEquals(GhostProtocol.TYPE_CLIPBOARD_GET, get.type);
+        assertEquals(0, get.payload.length);
+
+        Frame set = FrameCodec.readFully(in);
+        assertNotNull(set);
+        assertEquals(GhostProtocol.TYPE_CLIPBOARD_SET, set.type);
+        Record back = set.asRecord();
+        assertEquals(big.toString(), back.getString("text", ""));
+        assertEquals(1, back.getInt("ok", 0));
+        assertTrue("payload grew past the protocol ceiling", set.payload.length <= GhostProtocol.MAX_PAYLOAD);
+    }
+
+    @Test
     public void negativePresentationTimestampsSurvive() throws IOException {
         // MediaCodec can hand out a negative pts for the very first buffer.
         ByteArrayOutputStream out = new ByteArrayOutputStream();

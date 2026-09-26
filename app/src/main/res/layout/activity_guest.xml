@@ -87,9 +87,16 @@
         android:layout_gravity="bottom|end"
         android:layout_margin="10dp"
         android:background="@drawable/bg_pill"
-        android:orientation="horizontal"
+        android:orientation="vertical"
         android:padding="2dp"
         android:visibility="gone">
+
+        <!-- Row 1: system navigation + display rotation. -->
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnNavBack"
@@ -134,6 +141,49 @@
             android:paddingRight="8dp"
             android:text="@string/guest_nav_shade"
             android:textSize="12sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnNavRotate"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="0dp"
+            android:paddingLeft="8dp"
+            android:paddingRight="8dp"
+            android:text="@string/guest_nav_rotate"
+            android:textSize="12sp" />
+        </LinearLayout>
+
+        <!-- Row 2: clipboard bridge - push mine / pull the host's. -->
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnClipToHost"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="0dp"
+                android:paddingLeft="8dp"
+                android:paddingRight="8dp"
+                android:text="@string/guest_clip_to_host"
+                android:textSize="12sp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnClipFromHost"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="0dp"
+                android:paddingLeft="8dp"
+                android:paddingRight="8dp"
+                android:text="@string/guest_clip_from_host"
+                android:textSize="12sp" />
+        </LinearLayout>
     </LinearLayout>
 
     <!-- ===================== connect / detail panel ===================== -->

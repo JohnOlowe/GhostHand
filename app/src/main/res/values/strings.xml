@@ -65,6 +65,12 @@
     <string name="guest_nav_home">Home</string>
     <string name="guest_nav_recents">Recents</string>
     <string name="guest_nav_shade">Shade</string>
+    <string name="guest_nav_rotate">Rotate</string>
+    <string name="guest_clip_to_host">To host</string>
+    <string name="guest_clip_from_host">From host</string>
+    <string name="host_clip_to_guest">To guest</string>
+    <string name="host_clip_from_guest">From guest</string>
+    <string name="clipboard_updated">Clipboard updated (%1$d characters)</string>
     <string name="title_guest">Guest</string>
     <string name="guest_status_idle">Not connected</string>
     <string name="guest_status_discovering">Searching for hosts…</string>

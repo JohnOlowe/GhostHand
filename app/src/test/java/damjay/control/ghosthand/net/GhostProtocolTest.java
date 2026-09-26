@@ -126,6 +126,7 @@ public class GhostProtocolTest {
                 GhostProtocol.TYPE_WELCOME, GhostProtocol.TYPE_PONG, GhostProtocol.TYPE_VIDEO_CONFIG,
                 GhostProtocol.TYPE_VIDEO, GhostProtocol.TYPE_GEOMETRY, GhostProtocol.TYPE_STATS,
                 GhostProtocol.TYPE_BYE, GhostProtocol.TYPE_GLOBAL_ACTION,
+                GhostProtocol.TYPE_CLIPBOARD_GET, GhostProtocol.TYPE_CLIPBOARD_SET,
         };
         for (int i = 0; i < types.length; i++) {
             for (int j = i + 1; j < types.length; j++) {
@@ -142,6 +143,7 @@ public class GhostProtocolTest {
                 GhostProtocol.TYPE_WELCOME, GhostProtocol.TYPE_PONG, GhostProtocol.TYPE_VIDEO_CONFIG,
                 GhostProtocol.TYPE_VIDEO, GhostProtocol.TYPE_GEOMETRY, GhostProtocol.TYPE_STATS,
                 GhostProtocol.TYPE_BYE, GhostProtocol.TYPE_GLOBAL_ACTION,
+                GhostProtocol.TYPE_CLIPBOARD_GET, GhostProtocol.TYPE_CLIPBOARD_SET,
         };
         for (byte type : types) {
             String name = GhostProtocol.typeName(type);
@@ -162,6 +164,66 @@ public class GhostProtocolTest {
         assertEquals(3, GhostProtocol.GLOBAL_RECENTS);
         assertEquals(4, GhostProtocol.GLOBAL_NOTIFICATIONS);
         assertEquals(11, GhostProtocol.TYPE_GLOBAL_ACTION);
+
+        // Rotate is a GhostHand command, NOT an AccessibilityService action: it
+        // must sit outside 1..5 (5 = GLOBAL_ACTION_QUICK_SETTINGS there) so the
+        // host can never hand it to performGlobalAction by accident.
+        assertEquals(100, GhostProtocol.GLOBAL_ROTATE);
+        assertTrue(GhostProtocol.GLOBAL_ROTATE > 5);
+
+        assertEquals(12, GhostProtocol.TYPE_CLIPBOARD_GET);
+        assertEquals(13, GhostProtocol.TYPE_CLIPBOARD_SET);
+    }
+
+    // ------------------------------------------------------------------
+    // clipboard truncation
+    // ------------------------------------------------------------------
+
+    @Test
+    public void clipTextPassesOrdinaryTextThroughUntouched() {
+        assertEquals("hello\nworld", GhostProtocol.clipText("hello\nworld"));
+        assertEquals("", GhostProtocol.clipText(""));
+        assertEquals("", GhostProtocol.clipText(null));
+        // Nothing near the cap may be shortened by so much as a byte.
+        StringBuilder sb = new StringBuilder();
+        while (sb.length() < GhostProtocol.CLIP_MAX_BYTES) {
+            sb.append('x');
+        }
+        assertEquals(sb.length(), GhostProtocol.clipText(sb.toString()).length());
+    }
+
+    @Test
+    public void clipTextTruncatesAsciWithoutDroppingBelowTheCap() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < GhostProtocol.CLIP_MAX_BYTES + 500; i++) {
+            sb.append('a');
+        }
+        String out = GhostProtocol.clipText(sb.toString());
+        assertEquals(GhostProtocol.CLIP_MAX_BYTES, out.length());
+        assertEquals(-1, out.indexOf('\uFFFD'));
+        assertTrue(out.startsWith("aaaa"));
+    }
+
+    @Test
+    public void clipTextNeverSplitsAMultiByteCharacter() {
+        // '€' is 3 UTF-8 bytes; 65536 % 3 == 1, so the raw cut lands in the MIDDLE
+        // of a character. The truncator must back off to the character boundary -
+        // otherwise the peer's clipboard would start with a replacement marker.
+        String euro = "\u20AC";
+        StringBuilder sb = new StringBuilder();
+        while (sb.length() < GhostProtocol.CLIP_MAX_BYTES) {
+            sb.append(euro);
+        }
+        String out = GhostProtocol.clipText(sb.toString());
+
+        assertTrue(out.length() <= GhostProtocol.CLIP_MAX_BYTES);
+        assertEquals("split character on the wire", -1, out.indexOf('\uFFFD'));
+        assertEquals("expected only whole € characters", 0, out.length() % euro.length());
+        // Every kept character must decode to the original one.
+        for (int i = 0; i < out.length(); i += euro.length()) {
+            assertEquals(euro, out.substring(i, i + euro.length()));
+        }
+        assertTrue(GhostProtocol.clipBytes(out.toString()).length <= GhostProtocol.CLIP_MAX_BYTES);
     }
 
     @Test
