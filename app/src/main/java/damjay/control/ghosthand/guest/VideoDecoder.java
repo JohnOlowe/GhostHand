@@ -112,6 +112,9 @@ public class VideoDecoder {
      *
      * @param sps raw SPS NAL bytes, <b>without</b> the 00 00 00 01 start code
      * @param pps raw PPS NAL bytes, <b>without</b> the start code
+     *
+     * <p>The start codes are added back in {@link #start()} when the bytes become
+     * {@code MediaFormat} csd - see the note there.
      */
     public void setCodecConfig(byte[] sps, byte[] pps, int width, int height) {
         this.csd0 = (sps != null) ? sps : new byte[0];
@@ -168,6 +171,26 @@ public class VideoDecoder {
         }
     }
 
+    /**
+     * Prepends a 4-byte Annex-B start code ({@code 00 00 00 01}) to a bare NAL unit;
+     * leaves anything already start-coded untouched, so the helper is idempotent.
+     * Package-visible for the unit test.
+     */
+    static byte[] withStartCode(byte[] nal) {
+        if (nal == null || nal.length == 0) {
+            return new byte[0];
+        }
+        if (nal.length >= 4
+                && nal[0] == 0 && nal[1] == 0
+                && (nal[2] == 1 || (nal[2] == 0 && nal[3] == 1))) {
+            return nal;
+        }
+        byte[] out = new byte[nal.length + 4];
+        out[3] = 1;
+        System.arraycopy(nal, 0, out, 4, nal.length);
+        return out;
+    }
+
     // ------------------------------- lifecycle --------------------------------
 
     /**
@@ -181,11 +204,18 @@ public class VideoDecoder {
         MediaFormat format = MediaFormat.createVideoFormat(MIME,
                 lastWidth > 0 ? lastWidth : 1280,
                 lastHeight > 0 ? lastHeight : 720);
+        // The wire carries bare NAL units; MediaFormat wants Annex-B. KitKat's
+        // MediaCodec (extractCSD/queueCSDInputBuffer) memcpy's csd-0/csd-1 VERBATIM
+        // into codec-config input buffers with no fixup, and an H.264 decoder that
+        // receives an SPS with neither a 00 00 00 01 start code nor the avcC 0x01
+        // header understands nothing: parameters never parse, the screen stays grey
+        // or shows uninitialized green garbage. Newer platforms are more forgiving,
+        // which is how the missing prefix survived contact with them.
         if (csd0.length > 0) {
-            format.setByteBuffer("csd-0", ByteBuffer.wrap(csd0));
+            format.setByteBuffer("csd-0", ByteBuffer.wrap(withStartCode(csd0)));
         }
         if (csd1.length > 0) {
-            format.setByteBuffer("csd-1", ByteBuffer.wrap(csd1));
+            format.setByteBuffer("csd-1", ByteBuffer.wrap(withStartCode(csd1)));
         }
 
         codec = MediaCodec.createDecoderByType(MIME);

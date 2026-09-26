@@ -360,10 +360,13 @@ public class ScreenEncoder {
      * {@code 00 00 01} start codes) into its individual NAL units, <em>without</em>
      * the start codes.
      *
-     * <p>Why: the encoder gives us Annex-B (start-code delimited) bytes, but
-     * {@code MediaFormat.setByteBuffer("csd-0", ...)} on the decoder expects the
-     * bare SPS NAL and {@code "csd-1"} the bare PPS NAL. Feed it the start codes and
-     * the decoder refuses to configure on most devices.
+     * <p>Why: the wire carries bare NAL units (see
+     * {@link damjay.control.ghosthand.net.GhostProtocol#TYPE_VIDEO_CONFIG}). Start
+     * codes are a *framing* concern of a byte stream, not of a message - and the
+     * guest re-adds them when it turns the bytes into {@code MediaFormat} csd, which
+     * is where Annex-B framing is required again. KitKat's MediaCodec feeds csd-0/1
+     * verbatim into codec-config input buffers with no fixup, so a start-code-less
+     * SPS parses as nothing and the guest screen stays grey or turns green.
      */
     public static List<byte[]> splitStartCodes(byte[] data) {
         List<byte[]> out = new ArrayList<>();

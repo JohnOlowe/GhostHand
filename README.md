@@ -33,7 +33,7 @@ Package `damjay.control.ghosthand` · **minSdk 19 (Android 4.4)** · targetSdk 3
 ```bash
 git clone https://github.com/JohnOlowe/GhostHand.git
 cd GhostHand
-bash build.sh                 # setup + AndroidX + 83 unit tests + signed APK (~2.5 min cold)
+bash build.sh                 # setup + AndroidX + 88 unit tests + signed APK (~2.5 min cold)
 ```
 
 `build.sh` installs the toolchain into `toolchain/vendor` (JRE, Eclipse compiler, aapt2,
@@ -478,6 +478,12 @@ array-deque and returns. Two details that decide whether the picture looks right
   all - hence `startDecoderIfNeeded()` on both paths.
 * **The decoder renders straight to the Surface.** `releaseOutputBuffer(index, true)` pushes
   the decoded frame to the display; the guest never sees a Bitmap.
+* **`csd-0`/`csd-1` are Annex-B, start code and all.** The wire carries bare SPS/PPS NAL
+  units (`VIDEO_CONFIG`), but `MediaFormat` gets `00 00 00 01`-prefixed bytes, because
+  KitKat's `MediaCodec` feeds `csd-*` **verbatim** into codec-config input buffers with no
+  parsing - a start-code-less SPS reaches the decoder as gibberish and the screen shows
+  grey (nothing decoded) or green (uninitialized output). `VideoDecoder.withStartCode()`
+  re-adds the prefix, idempotently, at `configure()` time.
 
 `GuestActivity` then letterboxes the picture: it sizes `videoContainer` to the stream's aspect
 ratio inside the window and matches the device orientation to the stream's, so a portrait
@@ -856,7 +862,7 @@ tested on a plain JVM - no device, no emulator:
 bash toolchain/test.sh app --source 8
 # JUnit version 4.13.2
 # ...............................................................................
-# OK (83 tests)
+# OK (88 tests)
 ```
 
 What is covered:
@@ -905,6 +911,7 @@ phones.
 | "that does not look like an IP address" | the guest needs `192.168.x.x`, not a hostname. |
 | Black screen in a secure app | expected: `AUTO_MIRROR` is distrusted by the system for banking/DRM windows. Switch the host to `PUBLIC` mode. On Android 14+ the system asks you to confirm screen capture once more when the mode changes mid-session - that is the OS's one-capture-per-consent rule, not a malfunction. |
 | Picture freezes and then recovers | the decoder dropped a frame and is waiting for the next key frame (2 s). `dropped` in the guest's stats tells you it happened. |
+| Guest screen is grey or green, but touch works | the decoder never got the SPS/PPS in a form it can parse: `MediaFormat` csd must be Annex-B (start-code prefixed) - see the decoder notes above. Was vc6 (0.2.5). Green = uninitialized output buffers being rendered; grey = nothing decoded at all. |
 | `INSTALL_PARSE_FAILED_NO_CERTIFICATES` on an old phone | the APK has no v1 (JAR) signature, which is all Android 6.0 and older understand. `toolchain/lib.sh` enables it automatically when `min-api < 24`; a build made with a higher `--min-api` will not install there. |
 | `ClassNotFoundException` for one of your own activities at launch | the release build shrank away a class the manifest declares. The keep rules are generated from the manifest at dex time (`toolchain/manifest_keep.py`) and `verify_apk.py` fails a build missing any component - if you see this, something regenerated one without the other. Debug APK unaffected: it is never shrunk. |
 | The launcher icon still shows the green robot | the build is serving a cached resource table - `rm -rf app/build` and rebuild, or the icon resources were replaced without rebuilding. `python3 design/make_assets.py --check` says whether the files on disk match the design. |

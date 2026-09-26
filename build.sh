@@ -53,15 +53,17 @@ SOURCE=8            # 8 = compile against the real Android API surface (see RECI
 # versionCode 2 fixes the launch crash of versionCode 1 (missing Kotlin runtime):
 # a new code lets the store/ adb update path be seen to work, and the same code is used
 # for both configurations, which is what keeps them installable over each other.
-# versionCode 5: versionCode 2's release build could not launch at all (R8 deleted the
+# versionCode 6: versionCode 2's release build could not launch at all (R8 deleted the
 # unlisted SplashActivity); versionCode 3's could not launch on Android 4.4 (aapt2
-# gutted every vector's base copy); versionCode 4's host crashed on Android 14 when the
-# capture mode changed mid-session (a second createVirtualDisplay on a one-shot consent
-# grant). Every release has died of a device-specific rule the static gates could not
-# see yet. Both configurations always share the code, so they stay installable over
-# each other and over anything older.
-VERSION_CODE=5
-VERSION_NAME=0.2.4-androidx
+# gutted every vector's base copy); versionCode 4's host crashed on Android 14 (a second
+# createVirtualDisplay on a one-shot consent grant); versionCode 5's guest showed a grey
+# or green screen on Android 4.4 (MediaFormat csd fed to the decoder without Annex-B
+# start codes, which KitKat's MediaCodec passes through unparsed). Every release has
+# died of a device-specific rule the static gates could not see yet. Both configurations
+# always share the code, so they stay installable over each other and over anything
+# older.
+VERSION_CODE=6
+VERSION_NAME=0.2.5-androidx
 MODE="release"      # release | debug | both
 PUBLISH=0
 RUN_TESTS=1
