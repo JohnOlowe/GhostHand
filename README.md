@@ -750,7 +750,13 @@ tools do it, and all three are wired into `build.sh`.
 into `android.*` and `java.*`, and asks a real **API 19 `android.jar`** whether each one
 exists. Method and field lookups walk the superclass chain, exactly like the JVM's own
 resolution, and a call through one of our subclasses (`service.dispatchGesture(...)`) is
-followed into the framework superclass where it actually resolves. Whatever genuinely needs
+followed into the framework superclass where it actually resolves. The same walk covers
+references recorded against **library** types (the shape ECJ emits when a call's static
+receiver is an AppCompat widget): the tool reads the library's own class file, and only a
+member it *declares* counts as the library's promise - anything it merely inherits from the
+framework is walked on and checked against the API 19 jar, because `androidx/` in the
+constant pool never proved a method exists below API 21 (vc12's crash: `setButtonTintList`).
+Whatever genuinely needs
 a newer platform must be *declared* in `api-levels.txt` with the level and the reason - and
 an exemption that stops being referenced is reported as stale, so the list cannot quietly
 rot.
@@ -1093,6 +1099,7 @@ phones.
 | The host's Shizuku row did not change after I started Shizuku | the refresh side (vc11): the row re-reads at 1 Hz and on Shizuku's binder-received/binder-dead events, every button press logs its outcome, and Grant answers "permission requested" or why it could not ask. If the row never leaves "not running", see the row above - that is the delivery, not the refresh. |
 | The guest's Settings page is unreadable (dark text on dark) | was vc11: the panel hard-coded a translucent black background while the text came from the light theme - and KitKat has no dark-mode switch at all, so it is permanently in the light scheme. vc12 gives the panel the themed surface colour (white in light mode) and pins the pill surfaces (status, control bar, HUD) to a constant light `pill_text`, because the pills are dark in BOTH schemes. |
 | The docked bar floats above the bottom of the screen | was vc11: the floating bar's 10dp layout margin survived the dock, so the reserved strip included a 10dp gap under the bar. Docking now zeroes the margins (and float mode puts them back). |
+| Opening settings force-closes the guest (vc12: `NoSuchMethodError: setButtonTintList`) | vc12 tinted the choice rows with `setButtonTintList`, a framework API that first appears in API 21. It compiled happily (the android.jar is API 34) and only exploded at runtime on KitKat, because the static receiver type was the AppCompat widget - which made the reference look like an androidx one that "cannot" fail, and the API checker trusted that shape blindly. vc13 tints through `setSupportButtonTintList` (declared by AppCompat itself, so it exists on every API), and `check_api` now parses the library class file and follows such references down to their real declaring class, validating framework members against `android-19.jar`. **Install vc13.** |
 | Rotate has never done anything | two bugs, both fixed: (1) Shizuku never worked (row above), so the system-wide path was unreachable and the fallback only flips GhostHand's OWN window - invisible while the host mirrors another app; (2) the first permission ask was gated "once ever", and asking while the binder was missing was a silent no-op that disabled the dialog for good. vc12 re-asks every 30 s and the guest now gets an honest `HOST_TEXT` answer for every outcome: "rotated system-wide", "approve Shizuku on the host", or "only rotates GhostHand's own window". |
 | Play/Pause does nothing | it needs Shizuku: injecting a media key is shell work (`INJECT_EVENTS`). The host answers the press either way - "play/pause sent" or "needs Shizuku". Volume needs nothing of the sort: it is an `AudioManager` call and always works. |
 | Volume buttons do nothing on the host | the media stream may already be at its end (the HUD shows the level the host reports). If the HUD never appears, the session is not live - check the guest log for the `HOST_TEXT` answer. |

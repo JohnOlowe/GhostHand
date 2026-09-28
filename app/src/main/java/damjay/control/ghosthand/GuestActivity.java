@@ -934,19 +934,26 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
     }
 
     /**
-     * A checkbox/radio that reads on the panel's themed surface: AppCompat
-     * widgets because they can tint the little box/circle on every API level
-     * (the framework gained setButtonTintList only in 21, this app floors at 19).
+     * A checkbox/radio that reads on the panel's themed surface.
+     *
+     * <p>Deliberately {@code setSupportButtonTintList}, NOT
+     * {@code setButtonTintList}: AppCompat 1.6.1 does not override the
+     * framework method, so a call to it resolves up the hierarchy to
+     * {@code android.widget.CompoundButton.setButtonTintList} - added in API
+     * 21 - and throws NoSuchMethodError on this app's API 19 floor (that is
+     * exactly the vc12 GuestActivity crash). The {@code Support} variant is
+     * declared by the AppCompat widgets themselves and applies the tint on
+     * every API level, which is the entire point of it.
      */
     private static void tintChoice(android.widget.TextView choice, int color) {
         choice.setTextColor(color);
         if (choice instanceof androidx.appcompat.widget.AppCompatCheckBox) {
             ((androidx.appcompat.widget.AppCompatCheckBox) choice)
-                    .setButtonTintList(android.content.res.ColorStateList.valueOf(color));
+                    .setSupportButtonTintList(android.content.res.ColorStateList.valueOf(color));
         }
         if (choice instanceof androidx.appcompat.widget.AppCompatRadioButton) {
             ((androidx.appcompat.widget.AppCompatRadioButton) choice)
-                    .setButtonTintList(android.content.res.ColorStateList.valueOf(color));
+                    .setSupportButtonTintList(android.content.res.ColorStateList.valueOf(color));
         }
     }
 

@@ -20,6 +20,13 @@ and asks a real API 19 android.jar whether each one exists. Method and field loo
 the superclass and interface chain, exactly like the JVM's own resolution, so inherited
 methods are not false positives.
 
+References that name an androidx/kotlin *owner* are resolved through the bundled library
+class files the same way, instead of being trusted: the compiler records the static
+receiver type as the owner, so `widget.setButtonTintList(...)` on an AppCompat type shows
+up as an androidx reference that the runtime then resolves up the hierarchy into the
+framework - and if the framework method is newer than the app's floor, that is a device
+crash no class-file check would otherwise see (this is how vc12 shipped one).
+
 What is *not* a violation
 -------------------------
 Two kinds of newer-API reference are legitimate, and both must be declared in the
@@ -244,6 +251,57 @@ def app_classes(classes_dir):
                 yield os.path.join(root, name)
 
 
+# Compiled library classes are indexed here on first use: owner references that
+# name an androidx/kotlin class have to be resolved THROUGH that class file, not
+# trusted, because ECJ records the static receiver type as the reference owner -
+# so `((AppCompatRadioButton) x).setButtonTintList(...)` is an androidx-owned
+# reference in the class file that resolves to a FRAMEWORK method at runtime.
+_LIB_INDEX = None       # entry name (androidx/foo/Bar.class) -> jar that holds it
+_LIB_CACHE = {}         # class name -> parsed info (or None when unreadable)
+
+
+def _lib_index():
+    global _LIB_INDEX
+    if _LIB_INDEX is None:
+        _LIB_INDEX = {}
+        base = os.path.dirname(os.path.abspath(__file__))
+        vendor = os.path.join(base, "toolchain", "vendor")
+        if not os.path.isdir(vendor):
+            vendor = os.path.join(base, "vendor")
+        if os.path.isdir(vendor):
+            jars = []
+            for dirpath, _, files in os.walk(vendor):
+                for filename in files:
+                    if filename.endswith(".jar"):
+                        jars.append(os.path.join(dirpath, filename))
+            for jar in sorted(jars):
+                try:
+                    zf = zipfile.ZipFile(jar)
+                except (OSError, zipfile.BadZipFile):
+                    continue
+                for entry in zf.namelist():
+                    if entry.endswith(".class") and entry not in _LIB_INDEX:
+                        _LIB_INDEX[entry] = (jar, entry)
+    return _LIB_INDEX
+
+
+def lib_class(class_name):
+    """Parsed class file of a bundled library class, or None if we cannot read it."""
+    if class_name in _LIB_CACHE:
+        return _LIB_CACHE[class_name]
+    info = None
+    hit = _lib_index().get(class_name + ".class")
+    if hit:
+        jar, entry = hit
+        try:
+            with zipfile.ZipFile(jar) as zf:
+                info = parse_class(zf.read(entry), with_refs=False)
+        except (OSError, ValueError, struct.error, IndexError, KeyError):
+            info = None
+    _LIB_CACHE[class_name] = info
+    return info
+
+
 def is_platform_reference(owner):
     if owner.startswith("["):                       # array type
         return False
@@ -411,9 +469,19 @@ def main(argv):
         the hierarchy - so if the only thing that can provide it is an android.* class,
         that class had better have it. Skipping every reference whose owner is ours
         would hide exactly the calls this tool exists to find.
+
+        The search is exhaustive across the whole class graph (supers AND
+        interfaces, breadth-first): a platform class that LACKS the member does not
+        end the search, because a sibling branch (or a deeper superclass) may still
+        provide it - stopping early produced false alarms on interface branches.
+        A platform class that HAS it wins immediately; the verdict at exhaustion is
+        "absent" only when some platform branch said so and nothing was unreadable
+        (unreadable library or runtime-generated class = cannot disprove = silent).
         """
         pending = [owner]
         seen = set()
+        absent_at = None
+        uncertain = False
         while pending:
             current = pending.pop(0)
             if current is None or current in seen:
@@ -422,20 +490,44 @@ def main(argv):
             if current.startswith("damjay/"):
                 info = app.get(current)
                 if info is None:
-                    return None, None               # generated at runtime; nothing to say
+                    uncertain = True                 # generated at runtime; nothing to say
+                    continue
                 members = info["methods"] if kind == "method" else info["fields"]
                 if (name, descriptor) in members:
                     return True, None               # our own method: fine
                 pending.append(info.get("super"))
                 pending.extend(info.get("interfaces") or [])
             elif current.startswith("androidx/") or current.startswith("kotlin/"):
-                return True, None                   # the library's own minSdk is its promise
+                # Only the library's OWN declarations are its promise. A framework
+                # method merely inherited into it (the ECJ static-receiver-ref quirk
+                # above) is a runtime dependency on the platform: keep walking - to
+                # the library's own members (fine), its supers (maybe still library),
+                # or the framework (checked against the real android-19 jar).
+                info = lib_class(current)
+                if info is None:
+                    uncertain = True                # unreadable: cannot disprove
+                    continue
+                members = info["methods"] if kind == "method" else info["fields"]
+                if (name, descriptor) in members:
+                    return True, None
+                pending.append(info.get("super"))
+                pending.extend(info.get("interfaces") or [])
             elif is_platform_reference(current):
-                # Report the *platform* class as the owner of the symbol: that is the real
-                # API dependency, and it is what the allowlist should name.
-                return platform.has_member(current, name, descriptor, kind), current
+                # The platform class is the real API dependency; if it supplies the
+                # member (walking its own supers, like the JVM), we are done. If not,
+                # remember it as evidence of absence but keep exploring - another
+                # branch of the graph may still prove the member exists.
+                has = platform.has_member(current, name, descriptor, kind)
+                if has:
+                    return True, None
+                if has is None:
+                    uncertain = True                # class missing from the jar
+                elif absent_at is None:
+                    absent_at = current
             else:
-                return None, None
+                uncertain = True
+        if absent_at is not None and not uncertain:
+            return False, absent_at
         return None, None
 
     for info in parsed:

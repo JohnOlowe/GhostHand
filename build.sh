@@ -61,8 +61,10 @@ SOURCE=8            # 8 = compile against the real Android API surface (see RECI
 # a one-shot consent), vc5 showed grey/green on 4.4 (csd without Annex-B start
 # codes). Both configurations always share the code, so they stay installable over
 # each other and over anything older.
-VERSION_CODE=12
-VERSION_NAME=0.2.11-androidx
+# vc13: fix the vc12 guest crash (setButtonTintList reached the API-21 framework
+# method through the static AppCompat receiver type - tintChoice now uses setSupportButtonTintList).
+VERSION_CODE=13
+VERSION_NAME=0.2.12-androidx
 MODE="release"      # release | debug | both
 PUBLISH=0
 RUN_TESTS=1
