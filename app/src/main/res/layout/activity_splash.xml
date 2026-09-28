@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The splash: one full-bleed custom view and nothing else.
+
+  There is no background attribute on purpose - SplashView paints its own gradient, and
+  the splash theme's windowBackground is the same teal, so if the view has not drawn its
+  first frame yet there is still no white flash on the way in. That flash is the classic
+  Android splash bug and it is entirely avoidable.
+
+  The view is clickable so a tap can skip the animation; without clickable="true" the
+  view would not receive touches and the splash could not be dismissed.
+-->
+<damjay.control.ghosthand.SplashView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/splashAnimation"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:clickable="true"
+    android:focusable="true"
+    android:contentDescription="@string/splash_description" />

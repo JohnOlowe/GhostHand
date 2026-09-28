@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Accessibility service configuration.
+
+  canPerformGestures="true" is the one flag that matters: without it
+  AccessibilityService.dispatchGesture() throws instead of injecting, and the whole
+  touch feature is dead. It is also the flag that makes Android show the user the
+  "can perform gestures" warning when they enable the service - which is the honest
+  description of what GhostHand does on the host.
+
+  accessibilityEventTypes is deliberately narrow: this service never reads the screen,
+  it only injects. Asking for a wide event stream would be both unnecessary and
+  alarming to a user reading the permission screen.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="false"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="100"
+    android:settingsActivity="damjay.control.ghosthand.HostActivity"
+    android:summary="@string/accessibility_service_summary" />
