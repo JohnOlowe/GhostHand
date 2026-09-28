@@ -808,6 +808,20 @@ public class HostActivity extends AppCompatActivity {
             updated = updated.substring(updated.length() - 6000);
         }
         txtLog.setText(updated);
+        // Follow the newest line - without this the log fills the visible window
+        // within seconds of a session and the interesting lines (why live touch
+        // is on or off) scroll past nobody's eyes. Manual scrolling still works;
+        // this only moves to the end AFTER a write, so a user reading history
+        // gets re-anchored to the tail on the next line (the same trade every
+        // logcat-style pane makes).
+        android.view.View scroll = findViewById(R.id.scrollLog);
+        if (scroll != null) {
+            scroll.post(() -> {
+                android.view.View inner = scroll.findViewById(R.id.txtLog);
+                int bottom = inner != null ? inner.getBottom() : 0;
+                scroll.scrollTo(0, bottom);
+            });
+        }
     }
 
     private static String formatUptime(long millis) {

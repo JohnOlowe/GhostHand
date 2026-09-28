@@ -225,25 +225,34 @@ public class InjectionAccessibilityService extends AccessibilityService {
         private Api24() {
         }
 
-        static boolean dispatch(InjectionAccessibilityService service,
-                                TouchInjector.Gesture gesture) {
+        /** One stroke per finger; a moveTo-only path is a valid tap stroke. */
+        private static GestureDescription.StrokeDescription stroke(
+                int[] xs, int[] ys, long durationMs) {
             Path path = new Path();
-            path.moveTo(gesture.startX(), gesture.startY());
-            for (int i = 1; i < gesture.pointCount(); i++) {
-                path.lineTo(gesture.xs[i], gesture.ys[i]);
+            path.moveTo(xs[0], ys[0]);
+            for (int i = 1; i < xs.length; i++) {
+                path.lineTo(xs[i], ys[i]);
             }
-
             // A tap is a path with a single point. Android accepts that as a stroke:
             // StrokeDescription only needs *a* path, and a moveTo-only path is what
-            // every tap-injection sample uses. It is also why the tap case above does
-            // not fabricate a 1-pixel lineTo - that would inject a 1 px drag instead.
-            GestureDescription.StrokeDescription stroke =
-                    new GestureDescription.StrokeDescription(path, 0L,
-                            Math.max(1L, gesture.durationMs));
+            // every tap-injection sample uses. It is also why the tap case does not
+            // fabricate a 1-pixel lineTo - that would inject a 1 px drag instead.
+            return new GestureDescription.StrokeDescription(path, 0L,
+                    Math.max(1L, durationMs));
+        }
 
-            GestureDescription description = new GestureDescription.Builder()
-                    .addStroke(stroke)
-                    .build();
+        static boolean dispatch(InjectionAccessibilityService service,
+                                TouchInjector.Gesture gesture) {
+            GestureDescription.Builder builder = new GestureDescription.Builder()
+                    .addStroke(stroke(gesture.xs, gesture.ys, gesture.durationMs));
+            if (gesture.hasSecondPointer()) {
+                // A second finger rides in the SAME gesture: strokes of one
+                // description run concurrently, which is exactly the platform's
+                // multi-touch model - this is how a pinch-to-zoom replays on
+                // the dispatchGesture path.
+                builder.addStroke(stroke(gesture.xs2, gesture.ys2, gesture.durationMs));
+            }
+            GestureDescription description = builder.build();
 
             try {
                 boolean accepted = service.dispatchGesture(description, CALLBACK, null);

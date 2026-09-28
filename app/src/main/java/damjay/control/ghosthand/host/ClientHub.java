@@ -62,7 +62,7 @@ public class ClientHub implements ClientConnection.Listener {
          * where the platform requires it (dispatchGesture does).
          */
         void onGuestTouch(String clientName, int action, int xNormalized, int yNormalized,
-                          long timeMs);
+                          int x2Normalized, int y2Normalized, long timeMs);
 
         /**
          * A navigation button the guest pressed (back/home/recents/shade). Delivered
@@ -357,6 +357,9 @@ public class ClientHub implements ClientConnection.Listener {
                         (int) t.getInt("action", TouchInjector.ACTION_CANCEL),
                         (int) t.getInt("xN", 0),
                         (int) t.getInt("yN", 0),
+                        // Absent for single-touch records; -1 = one finger.
+                        (int) t.getInt("x2N", -1L),
+                        (int) t.getInt("y2N", -1L),
                         t.getInt("timeMs", System.currentTimeMillis()));
                 break;
             }

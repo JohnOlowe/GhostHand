@@ -42,6 +42,12 @@ public final class TouchInjector {
     public static final int ACTION_UP = 1;
     public static final int ACTION_MOVE = 2;
     public static final int ACTION_CANCEL = 3;
+    /** Two pointers went down together (both coordinates are in the record). */
+    public static final int ACTION_DOWN2 = 4;
+    /** Both pointers moved. */
+    public static final int ACTION_MOVE2 = 5;
+    /** The multi segment ended - the host lifts BOTH pointers on this event. */
+    public static final int ACTION_UP2 = 6;
 
     /** Tunables. The defaults are chosen to feel like a finger, not a stylus. */
     public static final class Policy {
@@ -81,12 +87,29 @@ public final class TouchInjector {
         public final long[] offsetsMs;
         /** Total stroke duration; always within the policy's clamp. */
         public final long durationMs;
+        /** Second finger (pinch); null for the ordinary one-finger gesture. */
+        public final int[] xs2;
+        public final int[] ys2;
+        public final long[] offsets2Ms;
 
         Gesture(int[] xs, int[] ys, long[] offsetsMs, long durationMs) {
+            this(xs, ys, offsetsMs, durationMs, null, null, null);
+        }
+
+        Gesture(int[] xs, int[] ys, long[] offsetsMs, long durationMs,
+                int[] xs2, int[] ys2, long[] offsets2Ms) {
             this.xs = xs;
             this.ys = ys;
             this.offsetsMs = offsetsMs;
             this.durationMs = durationMs;
+            this.xs2 = xs2;
+            this.ys2 = ys2;
+            this.offsets2Ms = offsets2Ms;
+        }
+
+        /** True when a second finger's path rides along (pinch-to-zoom). */
+        public boolean hasSecondPointer() {
+            return xs2 != null && xs2.length > 0;
         }
 
         public int pointCount() {
@@ -130,6 +153,7 @@ public final class TouchInjector {
             return (isTap() ? "tap" : "drag " + xs.length + "pt")
                     + " (" + startX() + "," + startY() + ")"
                     + (isTap() ? "" : " -> (" + endX() + "," + endY() + ")")
+                    + (hasSecondPointer() ? " +2nd finger" : "")
                     + " " + durationMs + "ms";
         }
     }
@@ -153,6 +177,13 @@ public final class TouchInjector {
     private int anchorX;
     private int anchorY;
     private long anchorTimeMs;
+
+    /** Second finger: same shape as the first, alive only between 4 and 6. */
+    private final List<float[]> trail2 = new ArrayList<>();
+    private boolean tracking2;
+    private int anchor2X;
+    private int anchor2Y;
+    private long anchor2TimeMs;
 
     public TouchInjector() {
         this(Policy.defaults());
@@ -181,14 +212,26 @@ public final class TouchInjector {
      * @return the finished {@link Gesture} when the touch is complete, otherwise null
      */
     public Gesture onTouch(int action, int xPx, int yPx, long timeMs) {
+        return onTouch(action, xPx, yPx, -1, -1, timeMs);
+    }
+
+    /**
+     * Feeds one guest touch event in, one or two pointers ({@code x2Px < 0} =
+     * single). The two-pointer set (4/5/6) keeps a parallel trail for the
+     * second finger; the finished {@link Gesture} then carries both paths and
+     * the accessibility side dispatches them as concurrent strokes - one
+     * gesture, two fingers, which is how a pinch-to-zoom replays on the
+     * no-grant path.
+     */
+    public Gesture onTouch(int action, int xPx, int yPx, int x2Px, int y2Px, long timeMs) {
         switch (action) {
             case ACTION_DOWN:
-                trail.clear();
-                trail.add(new float[] { xPx, yPx, timeMs });
+                startTrail(trail, xPx, yPx, timeMs);
                 anchorX = xPx;
                 anchorY = yPx;
                 anchorTimeMs = timeMs;
                 tracking = true;
+                dropSecond(); // a fresh single stream supersedes any stale multi
                 return null;
 
             case ACTION_MOVE:
@@ -196,28 +239,75 @@ public final class TouchInjector {
                     // A MOVE with no DOWN means we joined mid-gesture (the guest
                     // reconnected, or a DOWN frame was lost). Start tracking here so
                     // the rest of the drag is not silently thrown away.
-                    trail.clear();
-                    trail.add(new float[] { xPx, yPx, timeMs });
+                    startTrail(trail, xPx, yPx, timeMs);
                     anchorX = xPx;
                     anchorY = yPx;
                     anchorTimeMs = timeMs;
                     tracking = true;
                     return null;
                 }
-                appendIfSignificant(xPx, yPx, timeMs);
+                appendIfSignificant(trail, xPx, yPx, timeMs);
                 return null;
+
+            case ACTION_DOWN2:
+                startTrail(trail, xPx, yPx, timeMs);
+                anchorX = xPx;
+                anchorY = yPx;
+                anchorTimeMs = timeMs;
+                tracking = true;
+                startTrail(trail2, x2Px, y2Px, timeMs);
+                anchor2X = x2Px;
+                anchor2Y = y2Px;
+                anchor2TimeMs = timeMs;
+                tracking2 = true;
+                return null;
+
+            case ACTION_MOVE2:
+                if (!tracking2) {
+                    // Joined the pinch mid-gesture: start both trails here.
+                    startTrail(trail, xPx, yPx, timeMs);
+                    anchorX = xPx;
+                    anchorY = yPx;
+                    anchorTimeMs = timeMs;
+                    tracking = true;
+                    startTrail(trail2, x2Px, y2Px, timeMs);
+                    anchor2X = x2Px;
+                    anchor2Y = y2Px;
+                    anchor2TimeMs = timeMs;
+                    tracking2 = true;
+                    return null;
+                }
+                appendIfSignificant(trail, xPx, yPx, timeMs);
+                appendIfSignificant(trail2, x2Px, y2Px, timeMs);
+                return null;
+
+            case ACTION_UP2:
+                if (!tracking2) {
+                    return null;
+                }
+                appendIfSignificant(trail, xPx, yPx, timeMs);
+                appendIfSignificant(trail2, x2Px, y2Px, timeMs);
+                tracking = false;
+                tracking2 = false;
+                Gesture both = buildTwo(timeMs);
+                trail.clear();
+                trail2.clear();
+                return both;
 
             case ACTION_CANCEL:
                 trail.clear();
                 tracking = false;
+                dropSecond();
                 return null;
 
             case ACTION_UP:
                 if (!tracking) {
+                    dropSecond();
                     return null;
                 }
-                appendIfSignificant(xPx, yPx, timeMs);
+                appendIfSignificant(trail, xPx, yPx, timeMs);
                 tracking = false;
+                dropSecond(); // a single UP never carries a second finger
                 Gesture gesture = build(timeMs);
                 trail.clear();
                 return gesture;
@@ -231,6 +321,17 @@ public final class TouchInjector {
     public void reset() {
         trail.clear();
         tracking = false;
+        dropSecond();
+    }
+
+    private void dropSecond() {
+        trail2.clear();
+        tracking2 = false;
+    }
+
+    private static void startTrail(List<float[]> list, int x, int y, long timeMs) {
+        list.clear();
+        list.add(new float[] { x, y, timeMs });
     }
 
     // --------------------------------------------------------------------------
@@ -242,16 +343,16 @@ public final class TouchInjector {
      * events a second, and a stroke with 400 identical points is both a waste and a
      * shape Android's gesture engine mangles.
      */
-    private void appendIfSignificant(int xPx, int yPx, long timeMs) {
-        if (trail.isEmpty()) {
-            trail.add(new float[] { xPx, yPx, timeMs });
+    private void appendIfSignificant(List<float[]> list, int xPx, int yPx, long timeMs) {
+        if (list.isEmpty()) {
+            list.add(new float[] { xPx, yPx, timeMs });
             return;
         }
-        float[] last = trail.get(trail.size() - 1);
+        float[] last = list.get(list.size() - 1);
         float dx = xPx - last[0];
         float dy = yPx - last[1];
         if (Math.sqrt(dx * dx + dy * dy) >= policy.minSegmentPx) {
-            trail.add(new float[] { xPx, yPx, timeMs });
+            list.add(new float[] { xPx, yPx, timeMs });
             return;
         }
         // Too small to be its own point, so move the previous one to the finger's
@@ -276,25 +377,69 @@ public final class TouchInjector {
         // point may have been folded forward by a wobble.
         long elapsed = clamp(Math.max(0L, upTimeMs - anchorTimeMs),
                 policy.minDurationMs, policy.maxDurationMs);
-
+        int[] xs;
+        int[] ys;
+        long[] offsets;
         if (allPointsWithinSlop(trail)) {
             // A tap injects at the landing point, the same way Android dispatches a
             // click at the ACTION_DOWN position rather than wherever the finger
             // happened to stop.
-            return new Gesture(new int[] { anchorX }, new int[] { anchorY },
-                    new long[] { 0L }, elapsed);
-        }
-
-        List<float[]> points = reduceToCap(trail);
-        int[] xs = new int[points.size()];
-        int[] ys = new int[points.size()];
-        long[] offsets = new long[points.size()];
-        for (int i = 0; i < points.size(); i++) {
-            xs[i] = Math.round(points.get(i)[0]);
-            ys[i] = Math.round(points.get(i)[1]);
-            offsets[i] = Math.max(0L, (long) points.get(i)[2] - anchorTimeMs);
+            xs = new int[] { anchorX };
+            ys = new int[] { anchorY };
+            offsets = new long[] { 0L };
+        } else {
+            List<float[]> points = reduceToCap(trail);
+            xs = new int[points.size()];
+            ys = new int[points.size()];
+            offsets = new long[points.size()];
+            for (int i = 0; i < points.size(); i++) {
+                xs[i] = Math.round(points.get(i)[0]);
+                ys[i] = Math.round(points.get(i)[1]);
+                offsets[i] = Math.max(0L, (long) points.get(i)[2] - anchorTimeMs);
+            }
         }
         return new Gesture(xs, ys, offsets, elapsed);
+    }
+
+    /** Two-finger finish: both trails become one concurrent two-stroke gesture. */
+    private Gesture buildTwo(long upTimeMs) {
+        Gesture first = build(upTimeMs);
+        if (first == null) {
+            return null;
+        }
+        if (trail2.isEmpty()) {
+            return first;
+        }
+        int[] xs2;
+        int[] ys2;
+        long[] off2;
+        if (allPointsWithinSlop(trail2)) {
+            xs2 = new int[] { anchor2X };
+            ys2 = new int[] { anchor2Y };
+            off2 = new long[] { 0L };
+        } else {
+            List<float[]> points = reduceToCap(trail2);
+            xs2 = new int[points.size()];
+            ys2 = new int[points.size()];
+            off2 = new long[points.size()];
+            for (int i = 0; i < points.size(); i++) {
+                xs2[i] = Math.round(points.get(i)[0]);
+                ys2[i] = Math.round(points.get(i)[1]);
+                off2[i] = Math.max(0L, (long) points.get(i)[2] - anchor2TimeMs);
+            }
+        }
+        // One gesture, one duration: the strokes must cover the same window so
+        // dispatchGesture runs them together. The longer of the two wins.
+        long elapsed = first.durationMs;
+        if (off2.length > 0 && off2[off2.length - 1] > elapsed) {
+            elapsed = off2[off2.length - 1];
+        }
+        if (first.offsetsMs.length > 0
+                && first.offsetsMs[first.offsetsMs.length - 1] > elapsed) {
+            elapsed = first.offsetsMs[first.offsetsMs.length - 1];
+        }
+        return new Gesture(first.xs, first.ys, first.offsetsMs, elapsed,
+                xs2, ys2, off2);
     }
 
     private boolean allPointsWithinSlop(List<float[]> points) {

@@ -20,7 +20,6 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-import android.widget.RadioGroup;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -429,7 +428,9 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
         txtStatFps.setText("");
         txtStatPing.setText("");
         renderControls(); // connected is false: folds the bar and hides the handle
-        root.setPadding(0, 0, 0, 0); // no dock while idle
+        // The dock reserve is no longer root padding (see applyVideoAspect), so
+        // there is nothing to clear here - and clearing padding would fight the
+        // inset padding that fitsSystemWindows maintains while not immersive.
         exitImmersive();
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
     }
@@ -453,10 +454,19 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
             return;
         }
         int rw = root.getWidth();
-        // A docked (PUSH) control bar claims this much of the bottom; the
-        // video letterboxes into what is left, which is what "push the
-        // screen up" means in practice.
-        int rh = root.getHeight() - root.getPaddingBottom();
+        // A docked (PUSH) control bar claims the bottom band of the window; the
+        // video letterboxes into what is left, which is what "push the screen
+        // up" means in practice. The reserve is read from the bar itself, NOT
+        // from root padding: FrameLayout pins gravity=bottom children inside the
+        // content box (above any padding), so the padding approach left the bar
+        // drawn over the picture with an empty strip below it - exactly the vc13
+        // report ("on the base of the view, overlaid ... the space that comes up
+        // under the view seems larger than the bar"). Without padding involved,
+        // gravity BOTTOM lands the bar inside the reserved band, and the strip is
+        // the bar's own height - never more.
+        int reserve = (dockedNow && controlsBar.getVisibility() == View.VISIBLE)
+                ? controlsBar.getHeight() : 0;
+        int rh = root.getHeight() - root.getPaddingBottom() - reserve;
         if (rw <= 0 || rh <= 0) {
             return;
         }
@@ -475,14 +485,23 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
         }
 
         ViewGroup.LayoutParams lp = videoContainer.getLayoutParams();
-        if (lp == null || (lp.width == targetW && lp.height == targetH)) {
+        if (lp == null || !(lp instanceof FrameLayout.LayoutParams)) {
+            return;
+        }
+        // Docked: top-anchor the picture so it hugs the top of the remaining
+        // box with the bar directly beneath it; otherwise centre it (letterbox
+        // bands split evenly). The gravity must be part of the change check -
+        // a landscape video's height does not move when the dock toggles, so a
+        // size-only check would never flip the anchor.
+        int wantGravity = reserve > 0
+                ? (Gravity.TOP | Gravity.CENTER_HORIZONTAL) : Gravity.CENTER;
+        FrameLayout.LayoutParams flp = (FrameLayout.LayoutParams) lp;
+        if (lp.width == targetW && lp.height == targetH && flp.gravity == wantGravity) {
             return;
         }
         lp.width = targetW;
         lp.height = targetH;
-        if (lp instanceof FrameLayout.LayoutParams) {
-            ((FrameLayout.LayoutParams) lp).gravity = Gravity.CENTER;
-        }
+        flp.gravity = wantGravity;
         videoContainer.setLayoutParams(lp);
     }
 
@@ -793,9 +812,10 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
 
     /**
      * Docks or floats the bar. PUSH gives it the full width at the bottom and
-     * reserves its height out of the root, so the letterbox math in
-     * {@link #applyVideoAspect()} genuinely pushes the picture up; FLOAT is the
-     * old draggable pill, untouched.
+     * reserves its height out of the video's available box, so the letterbox
+     * math in {@link #applyVideoAspect()} genuinely pushes the picture up -
+     * picture on top, bar filling the reserved band under it; FLOAT is the old
+     * draggable pill, untouched.
      */
     private void updateDocking() {
         boolean docked = ctrlState != ControlsConfig.State.UNEXPANDED
@@ -823,13 +843,11 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
             controlsBar.setTranslationY(0f);
         }
         controlsBar.setLayoutParams(lp);
-        controlsBar.post(() -> {
-            int pad = docked ? controlsBar.getHeight() + lp.bottomMargin : 0;
-            if (root.getPaddingBottom() != pad) {
-                root.setPadding(0, 0, 0, pad);
-            }
-            applyVideoAspect();
-        });
+        // Re-run the letterbox with the freshly laid-out bar: the reserved band
+        // comes from its measured height (applyVideoAspect), so no root padding
+        // is written here - padding would be both wiped by inset dispatch and
+        // ignored by FrameLayout gravity, which is what broke the vc12/vc13 dock.
+        controlsBar.post(this::applyVideoAspect);
     }
 
     private ControlsConfig.Dock dockFor(ControlsConfig.State state) {
@@ -957,28 +975,38 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
         }
     }
 
-    private RadioGroup dockGroup(final boolean forOneLine) {
-        RadioGroup g = new RadioGroup(this);
-        g.setOrientation(RadioGroup.HORIZONTAL);
-        ControlsConfig.Dock current = forOneLine ? dockOneLine : dockExpanded;
+    private View dockGroup(final boolean forOneLine) {
+        // Deliberately NOT a RadioGroup. The vc13 field report: tapping
+        // "Dock below the video" lit up the OTHER option while the saved value
+        // was correct - RadioGroup's mutual exclusion is a three-listener dance
+        // between addView, CheckedStateTracker and setCheckedId, all keyed on
+        // ids and listener attachment order, and the panel's radios are built
+        // programmatically in an AppCompat theme where none of that can be
+        // observed from here. Two plain radio buttons whose checked state this
+        // method WRITES explicitly have exactly one truth: the fields.
+        LinearLayout g = new LinearLayout(this);
+        g.setOrientation(LinearLayout.HORIZONTAL);
         final int ink = getResources().getColor(R.color.text_primary);
         androidx.appcompat.widget.AppCompatRadioButton floatBtn =
                 new androidx.appcompat.widget.AppCompatRadioButton(this);
         floatBtn.setId(View.generateViewId());
         floatBtn.setText(R.string.guest_settings_float);
-        floatBtn.setChecked(current == ControlsConfig.Dock.FLOAT);
         androidx.appcompat.widget.AppCompatRadioButton pushBtn =
                 new androidx.appcompat.widget.AppCompatRadioButton(this);
         pushBtn.setId(View.generateViewId());
         pushBtn.setText(R.string.guest_settings_push);
-        pushBtn.setChecked(current == ControlsConfig.Dock.PUSH);
         tintChoice(floatBtn, ink);
         tintChoice(pushBtn, ink);
         g.addView(floatBtn);
         g.addView(pushBtn);
-        g.setOnCheckedChangeListener((group, checkedId) -> {
-            boolean push = checkedId == pushBtn.getId();
-            ControlsConfig.Dock dock = push
+        final Runnable sync = () -> {
+            ControlsConfig.Dock now = forOneLine ? dockOneLine : dockExpanded;
+            floatBtn.setChecked(now == ControlsConfig.Dock.FLOAT);
+            pushBtn.setChecked(now == ControlsConfig.Dock.PUSH);
+        };
+        sync.run();
+        android.view.View.OnClickListener pick = v -> {
+            ControlsConfig.Dock dock = v == pushBtn
                     ? ControlsConfig.Dock.PUSH : ControlsConfig.Dock.FLOAT;
             if (forOneLine) {
                 dockOneLine = dock;
@@ -988,8 +1016,11 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
             controlPrefs.edit()
                     .putInt(forOneLine ? "mode_one_line" : "mode_expanded", dock.ordinal())
                     .apply();
+            sync.run(); // exactly one checked, always the field's value
             renderControls();
-        });
+        };
+        floatBtn.setOnClickListener(pick);
+        pushBtn.setOnClickListener(pick);
         return g;
     }
 
@@ -1095,6 +1126,13 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
      * letterbox offsets must not leak in. The host injects them (live via
      * Shizuku, or replays the drag with dispatchGesture at lift-off).
      *
+     * <p>Two fingers are a first-class gesture, not an error: the moment the
+     * second pointer lands the stream switches to the two-pointer records
+     * (wire actions 4/5/6 = both-down / both-move / multi-ended) so the host
+     * can pinch and zoom exactly as the guest's fingers move. When one finger
+     * lifts, the remaining one re-enters as a fresh single DOWN, which keeps
+     * the single-pointer contract untouched for everything else.
+     *
      * <p>The control bar, handle, pill, HUD and settings panel all live OUTSIDE
      * videoContainer, so anything they cover is consumed here and never
      * reaches the host.
@@ -1111,7 +1149,7 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
                     protocolAction = 0;
                     break;
                 case MotionEvent.ACTION_MOVE:
-                    protocolAction = 2;
+                    protocolAction = event.getPointerCount() >= 2 ? 5 : 2;
                     break;
                 case MotionEvent.ACTION_UP:
                     protocolAction = 1;
@@ -1119,17 +1157,35 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
                 case MotionEvent.ACTION_CANCEL:
                     protocolAction = 3;
                     break;
+                case MotionEvent.ACTION_POINTER_DOWN:
+                    if (event.getPointerCount() < 2) {
+                        return false;
+                    }
+                    protocolAction = 4; // second finger landed
+                    break;
+                case MotionEvent.ACTION_POINTER_UP:
+                    if (event.getPointerCount() < 2) {
+                        return false;
+                    }
+                    protocolAction = 6; // multi segment ends with this lift
+                    break;
                 default:
-                    return false; // multi-touch is a later milestone
+                    return false;
             }
 
-            float nx = event.getX() / (float) Math.max(1, view.getWidth());
-            float ny = event.getY() / (float) Math.max(1, view.getHeight());
-            nx = Math.max(0f, Math.min(1f, nx));
-            ny = Math.max(0f, Math.min(1f, ny));
+            float w = Math.max(1, view.getWidth());
+            float h = Math.max(1, view.getHeight());
+            float nx = clamp01(event.getX(0) / w);
+            float ny = clamp01(event.getY(0) / h);
+            float nx2 = -1f;
+            float ny2 = -1f;
+            if (protocolAction >= 4 && event.getPointerCount() >= 2) {
+                nx2 = clamp01(event.getX(1) / w);
+                ny2 = clamp01(event.getY(1) / h);
+            }
 
             long now = SystemClock.uptimeMillis();
-            if (protocolAction == 2) {
+            if (protocolAction == 2 || protocolAction == 5) {
                 // Throttle drag streams: 60 Hz of MOVE events would flood a link that
                 // is already carrying video.
                 boolean movedEnough = Math.abs(nx - lastTouchX) > 0.004f
@@ -1141,9 +1197,26 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
             lastTouchSentMs = now;
             lastTouchX = nx;
             lastTouchY = ny;
-            controller.sendTouch(protocolAction, nx, ny, now);
+            controller.sendTouch(protocolAction, nx, ny, nx2, ny2, now);
+            if (protocolAction == 6 && event.getPointerCount() >= 2) {
+                // One finger stays down after the multi segment. The host has
+                // just lifted BOTH of its pointers (a zoom ends when either
+                // finger leaves), so re-establish the survivor as a fresh
+                // single DOWN - taps and drags after a pinch then behave as if
+                // the pinch never happened.
+                int stay = event.getActionIndex() == 0 ? 1 : 0;
+                float sx = clamp01(event.getX(stay) / w);
+                float sy = clamp01(event.getY(stay) / h);
+                lastTouchX = sx;
+                lastTouchY = sy;
+                controller.sendTouch(0, sx, sy, now);
+            }
             return true;
         });
+    }
+
+    private static float clamp01(float v) {
+        return Math.max(0f, Math.min(1f, v));
     }
 
     // --------------------------------------------------------------------------

@@ -521,11 +521,31 @@ public class GuestController {
 
     /** A tap on the mirrored image. Coordinates are normalised to 0..10000. */
     public void sendTouch(int action, float normalizedX, float normalizedY, long timeMs) {
+        sendTouch(action, normalizedX, normalizedY, -1f, -1f, timeMs);
+    }
+
+    /**
+     * One touch record, single- or two-pointer. {@code normalizedX2 < 0} marks
+     * the single-pointer form; otherwise the record carries both fingers (wire
+     * actions 4/5/6 = both-down / both-move / multi-ended) and the host runs
+     * them as one concurrent gesture - pinch-to-zoom follows the guest's two
+     * fingers in real time on the live path.
+     *
+     * <p>A host that predates two-pointer support simply has no handler for
+     * actions 4-6 (the frame is ignored), so mixed versions degrade to
+     * single-touch rather than misbehaving.
+     */
+    public void sendTouch(int action, float normalizedX, float normalizedY,
+                          float normalizedX2, float normalizedY2, long timeMs) {
         Record r = Record.create()
                 .putInt("action", action)
                 .putInt("xN", (long) (normalizedX * 10000f))
                 .putInt("yN", (long) (normalizedY * 10000f))
                 .putInt("timeMs", timeMs);
+        if (normalizedX2 >= 0f) {
+            r.putInt("x2N", (long) (normalizedX2 * 10000f))
+                    .putInt("y2N", (long) (normalizedY2 * 10000f));
+        }
         sendFrame(new Frame(GhostProtocol.TYPE_TOUCH, (byte) 0, timeMs * 1000L, r.toBytes()));
     }
 

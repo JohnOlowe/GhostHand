@@ -57,6 +57,13 @@ public final class GhostProtocol {
     /** First frame a guest sends. Payload: {@link Record} (appName, version, w, h). */
     public static final byte TYPE_HELLO = 1;
     /** A touch event. Payload: {@link Record} (action, x, y, pointer, pressure, timeMs). */
+    /**
+     * A touch on the mirrored picture. The payload Record carries {@code action}
+     * (0 DOWN, 1 UP, 2 MOVE, 3 CANCEL, and the two-pointer set 4 both-down,
+     * 5 both-move, 6 multi-ended), {@code xN}/{@code yN} normalised 0..10000,
+     * {@code timeMs}, and - for actions 4-6 - {@code x2N}/{@code y2N} for the
+     * second finger. Unknown actions are ignored by older hosts.
+     */
     public static final byte TYPE_TOUCH = 2;
     /** Latency probe. Payload: 8-byte token echoed back in PONG. */
     public static final byte TYPE_PING = 3;

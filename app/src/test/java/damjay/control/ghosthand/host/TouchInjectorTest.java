@@ -401,4 +401,109 @@ public class TouchInjectorTest {
         assertTrue(g.pathLengthPx() >= 480f);
         assertTrue(g.toString().contains("drag"));
     }
+
+    // ------------------------------------------------------------------
+    // Two fingers: the pinch-to-zoom records (wire actions 4/5/6)
+    // ------------------------------------------------------------------
+
+    /** Feeds a DOWN2/MOVE2.../UP2 sequence with both pointers' coordinates. */
+    private static TouchInjector.Gesture pinch(TouchInjector in,
+            int[][] p0, int[][] p1, long[] times) {
+        TouchInjector.Gesture result = null;
+        for (int i = 0; i < times.length; i++) {
+            int action = i == 0 ? TouchInjector.ACTION_DOWN2
+                    : (i == times.length - 1 ? TouchInjector.ACTION_UP2
+                    : TouchInjector.ACTION_MOVE2);
+            result = in.onTouch(action, p0[i][0], p0[i][1], p1[i][0], p1[i][1], times[i]);
+        }
+        return result;
+    }
+
+    @Test
+    public void aPinchCarriesBothFingersPaths() {
+        TouchInjector in = injector();
+        int[][] p0 = { { 300, 1200 }, { 240, 1200 }, { 180, 1200 } };
+        int[][] p1 = { { 780, 1200 }, { 840, 1200 }, { 900, 1200 } };
+        long[] times = { 0L, 20L, 40L };
+
+        TouchInjector.Gesture g = pinch(in, p0, p1, times);
+
+        assertNotNull(g);
+        assertTrue("second finger present", g.hasSecondPointer());
+        assertFalse(g.isTap());
+        assertEquals("left finger walks left", 180, g.endX());
+        assertEquals("right finger walks right", 900, g.xs2[g.xs2.length - 1]);
+        assertEquals("both paths carry points", g.xs2.length, g.ys2.length);
+        assertEquals(40L, g.durationMs);
+        assertTrue(g.toString().contains("+2nd finger"));
+    }
+
+    @Test
+    public void aTwoFingerTapHoldsBothAnchors() {
+        TouchInjector in = injector();
+        TouchInjector.Gesture g = pinch(in,
+                new int[][] { { 500, 1000 }, { 500, 1000 } },
+                new int[][] { { 600, 1000 }, { 600, 1000 } },
+                new long[] { 0L, 300L });
+
+        assertNotNull(g);
+        assertTrue(g.hasSecondPointer());
+        assertEquals(1, g.xs.length);
+        assertEquals(1, g.xs2.length);
+        assertEquals(500, g.xs[0]);
+        assertEquals(600, g.xs2[0]);
+        assertTrue("held, not instantaneous", g.durationMs >= 300L);
+    }
+
+    @Test
+    public void aPinchJoinedMidGestureStartsBothTrails() {
+        // The guest reconnected mid-pinch: MOVE2 arrives with no DOWN2, exactly
+        // like the single-finger join case.
+        TouchInjector in = injector();
+        TouchInjector.Gesture g = in.onTouch(TouchInjector.ACTION_MOVE2,
+                400, 1200, 600, 1200, 0L);
+        assertNull(g);
+        g = in.onTouch(TouchInjector.ACTION_MOVE2,
+                360, 1200, 640, 1200, 40L);
+        assertNull(g);
+        g = in.onTouch(TouchInjector.ACTION_UP2,
+                340, 1200, 660, 1200, 80L);
+
+        assertNotNull(g);
+        assertTrue(g.hasSecondPointer());
+        assertEquals(80L, g.durationMs);
+    }
+
+    @Test
+    public void aSingleUpAfterAPinchNeverCarriesTheSecondFinger() {
+        TouchInjector in = injector();
+        assertNotNull(pinch(in,
+                new int[][] { { 300, 1200 }, { 300, 1200 } },
+                new int[][] { { 780, 1200 }, { 780, 1200 } },
+                new long[] { 0L, 60L }));
+
+        // The guest's remaining finger re-enters as a fresh single DOWN: the
+        // resulting gesture must be ordinary one-pointer again.
+        TouchInjector.Gesture g = gesture(in,
+                new int[][] { { 500, 700 }, { 520, 760 }, { 540, 820 } },
+                new long[] { 100L, 120L, 140L });
+
+        assertNotNull(g);
+        assertFalse(g.hasSecondPointer());
+        assertTrue(g.toString().contains("drag"));
+    }
+
+    @Test
+    public void cancelDropsAPinchInTheMaking() {
+        TouchInjector in = injector();
+        assertNull(in.onTouch(TouchInjector.ACTION_DOWN2,
+                300, 1200, 780, 1200, 0L));
+        assertNull(in.onTouch(TouchInjector.ACTION_CANCEL, 0, 0, -1, -1, 20L));
+        // The next single tap after the cancel is clean - no ghost second path.
+        assertNull(in.onTouch(TouchInjector.ACTION_DOWN, 100, 100, 50L));
+        TouchInjector.Gesture g = in.onTouch(TouchInjector.ACTION_UP, 100, 100, 200L);
+        assertNotNull(g);
+        assertTrue(g.isTap());
+        assertFalse(g.hasSecondPointer());
+    }
 }

@@ -63,8 +63,15 @@ SOURCE=8            # 8 = compile against the real Android API surface (see RECI
 # each other and over anything older.
 # vc13: fix the vc12 guest crash (setButtonTintList reached the API-21 framework
 # method through the static AppCompat receiver type - tintChoice now uses setSupportButtonTintList).
-VERSION_CODE=13
-VERSION_NAME=0.2.12-androidx
+# vc14: the docked bar now occupies its reserved band (no root padding - FrameLayout
+# gravity sits above padding, which is why the bar overlaid the picture with an
+# empty strip below); the settings radios are driven explicitly (RadioGroup's
+# exclusion dance lit the wrong option); live touch tries the STOCK inject code
+# before the Lineage one (API 34 stock is 10 - the old table's 12 landed on
+# verifyInputEvent and silently disabled streaming); two-finger pinch is on the
+# wire (actions 4/5/6) for both injection paths.
+VERSION_CODE=14
+VERSION_NAME=0.2.13-androidx
 MODE="release"      # release | debug | both
 PUBLISH=0
 RUN_TESTS=1

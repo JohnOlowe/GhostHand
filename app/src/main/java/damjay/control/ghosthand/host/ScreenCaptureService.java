@@ -131,6 +131,7 @@ public class ScreenCaptureService extends Service
     /** Live-touch probe cache (see canLiveTouch). */
     private volatile long lastLiveProbeAt;
     private volatile boolean liveTouchGranted;
+    private boolean liveTouchOffLogged;
 
     private MediaProjection projection;
     private MediaProjection.Callback projectionCallback;
@@ -770,15 +771,19 @@ public class ScreenCaptureService extends Service
      */
     @Override
     public void onGuestTouch(String clientName, int action, int xNormalized,
-                             int yNormalized, long timeMs) {
+                             int yNormalized, int x2Normalized, int y2Normalized,
+                             long timeMs) {
         if (canLiveTouch()) {
             int[] size = liveDisplaySize();
             int x = TouchInjector.toPixels(xNormalized, size[0]);
             int y = TouchInjector.toPixels(yNormalized, size[1]);
-            TouchInjector.Gesture planned = touchInjector.onTouch(action, x, y, timeMs);
-            boolean ok = ShellTouch.onTouch(action, x, y, timeMs);
+            int x2 = x2Normalized < 0 ? -1 : TouchInjector.toPixels(x2Normalized, size[0]);
+            int y2 = y2Normalized < 0 ? -1 : TouchInjector.toPixels(y2Normalized, size[1]);
+            TouchInjector.Gesture planned = touchInjector.onTouch(action, x, y, x2, y2, timeMs);
+            boolean ok = ShellTouch.onTouch(action, x, y, x2, y2, timeMs);
             if (!ok && planned != null
                     && (action == TouchInjector.ACTION_UP
+                        || action == TouchInjector.ACTION_UP2
                         || action == TouchInjector.ACTION_CANCEL)) {
                 // Live injection died partway through this gesture: the planned
                 // stroke is the safety net, exactly as if Shizuku were off.
@@ -818,8 +823,12 @@ public class ScreenCaptureService extends Service
         int[] size = injector.displaySize();
         int x = TouchInjector.toPixels(xNormalized, size[0]);
         int y = TouchInjector.toPixels(yNormalized, size[1]);
+        int x2 = x2Normalized < 0 ? -1 : TouchInjector.toPixels(x2Normalized, size[0]);
+        int y2 = y2Normalized < 0 ? -1 : TouchInjector.toPixels(y2Normalized, size[1]);
 
-        TouchInjector.Gesture gesture = touchInjector.onTouch(action, x, y, timeMs);
+        // The planner buffers either pointer count, so the no-grant path can
+        // also replay a pinch (as two concurrent strokes) at lift-off.
+        TouchInjector.Gesture gesture = touchInjector.onTouch(action, x, y, x2, y2, timeMs);
         if (gesture == null) {
             return; // still buffering a drag, or a cancelled gesture
         }
@@ -888,13 +897,36 @@ public class ScreenCaptureService extends Service
         if (now - lastLiveProbeAt > 2_000L) {
             lastLiveProbeAt = now;
             boolean granted = ElevatedShell.probe() == ElevatedShell.State.GRANTED
-                    && InputCodes.injectInputEventCode(Build.VERSION.SDK_INT) > 0;
+                    && InputCodes.injectInputEventCodes(Build.VERSION.SDK_INT,
+                            ShellTouch.isLineageRom()).length > 0;
             if (granted && !liveTouchGranted) {
                 log("live touch ON - touches stream as they move (shizuku)");
+            } else if ((!granted || ShellTouch.isBroken()) && liveTouchGranted) {
+                log("live touch OFF - " + liveTouchOffReason());
+            } else if (!granted && !liveTouchOffLogged) {
+                // The vc13 field report was exactly this silence: swipes fell
+                // back to lift-off replay with no visible cause. Say WHY once.
+                log("live touch OFF - " + liveTouchOffReason());
+                liveTouchOffLogged = true;
             }
             liveTouchGranted = granted;
         }
         return liveTouchGranted && !ShellTouch.isBroken();
+    }
+
+    /** One line for the host dashboard when streaming is not active. */
+    private String liveTouchOffReason() {
+        if (ElevatedShell.probe() != ElevatedShell.State.GRANTED) {
+            return "shizuku not granted (grant it in the Shizuku app)";
+        }
+        if (InputCodes.injectInputEventCodes(Build.VERSION.SDK_INT,
+                ShellTouch.isLineageRom()).length == 0) {
+            return "unknown input interface on API " + Build.VERSION.SDK_INT;
+        }
+        if (ShellTouch.isBroken()) {
+            return ShellTouch.statusLine();
+        }
+        return "not started yet";
     }
 
     /**
