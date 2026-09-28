@@ -4,8 +4,11 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
+import android.content.res.Configuration;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.view.Gravity;
 import android.view.LayoutInflater;
@@ -15,7 +18,11 @@ import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.CheckBox;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -38,9 +45,13 @@ import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
+import damjay.control.ghosthand.guest.ControlsConfig;
 import damjay.control.ghosthand.guest.GuestController;
 import damjay.control.ghosthand.util.DraggableLayout;
 import damjay.control.ghosthand.util.TextComposer;
@@ -103,6 +114,34 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
     private TextInputEditText edtHost;
     private MaterialButton btnConnect;
     private MaterialButton btnDisconnect;
+    private LinearLayout statusPill;
+    private DraggableLayout controlsBar;
+    private View btnHandle;
+    private TextView txtHud;
+    private View panelSettings;
+    private LinearLayout settingsContent;
+
+    // Three-state control bar - the pure rules live in ControlsConfig, the
+    // views live below. One SharedPreferences file holds everything the
+    // settings page edits: state, per-state dock mode, per-state button sets.
+    private static final String CONTROL_PREFS = "guest_controls";
+    private ControlsConfig.State ctrlState = ControlsConfig.State.ONE_LINE;
+    private ControlsConfig.Dock dockOneLine = ControlsConfig.Dock.FLOAT;
+    private ControlsConfig.Dock dockExpanded = ControlsConfig.Dock.FLOAT;
+    private final Set<String> oneLineIds = new LinkedHashSet<>();
+    private final Set<String> expandedIds = new LinkedHashSet<>();
+    private final LinkedHashMap<String, Integer> buttonLabels = new LinkedHashMap<>();
+    private SharedPreferences controlPrefs;
+    /** True while the bar is docked (PUSH): pinned, undraggable, no saved offset. */
+    private boolean dockedNow;
+    /** The one-tap clean view: bars away, pill away, controls folded. */
+    private boolean fullscreenClean;
+
+    // Status pill auto-hide (the pill used to sit on the video permanently).
+    private final Handler pillHandler = new Handler(Looper.getMainLooper());
+    private final Runnable pillHideTick = () -> hideStatusPill(false);
+    private final Handler hudHandler = new Handler(Looper.getMainLooper());
+    private final Runnable hudHideTick = () -> txtHud.setVisibility(View.GONE);
 
     private HostAdapter hostAdapter;
     private GuestController controller;
@@ -157,6 +196,15 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
         edtHost = findViewById(R.id.edtHost);
         btnConnect = findViewById(R.id.btnConnect);
         btnDisconnect = findViewById(R.id.btnDisconnect);
+        statusPill = findViewById(R.id.statusPill);
+        controlsBar = findViewById(R.id.controlsBar);
+        btnHandle = findViewById(R.id.btnHandle);
+        txtHud = findViewById(R.id.txtHud);
+        panelSettings = findViewById(R.id.panelSettings);
+        settingsContent = findViewById(R.id.settingsContent);
+        // The HUD only flashes for a moment; never let a stray tap on it
+        // travel through to the host's screen underneath.
+        txtHud.setClickable(true);
 
         setupHostList();
         controller = new GuestController(this);
@@ -165,7 +213,10 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
         setupSurface();
         setupControls();
         setupTouchForwarding();
-        setupSystemControls();
+        setupControlRegistry();
+        loadControlPrefs();
+        buildSettingsPanel();
+        setupStatusPill();
         setupControlsDrag();
 
         // The root lays out asynchronously and letterboxing needs real pixel sizes,
@@ -194,12 +245,23 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
 
     @Override
     protected void onDestroy() {
+        pillHandler.removeCallbacks(pillHideTick);
+        hudHandler.removeCallbacks(hudHideTick);
         controller.disconnect("activity destroyed");
         if (decoder != null) {
             decoder.stop();
             decoder = null;
         }
         super.onDestroy();
+    }
+
+    @Override
+    public void onConfigurationChanged(@NonNull Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        // Portrait/landscape changes how many buttons fit per row; re-wrap.
+        if (connected) {
+            renderControls();
+        }
     }
 
     @Override
@@ -357,11 +419,19 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
         txtStatus.setText(R.string.guest_status_idle);
         showOverlay(getString(R.string.guest_status_idle));
         panelConnect.setVisibility(View.VISIBLE);
-        findViewById(R.id.controlsBar).setVisibility(View.GONE);
+        panelSettings.setVisibility(View.GONE);
+        fullscreenClean = false;
+        pillHandler.removeCallbacks(pillHideTick);
+        statusPill.animate().cancel();
+        statusPill.setAlpha(1f);
+        hudHandler.removeCallbacks(hudHideTick);
+        txtHud.setVisibility(View.GONE);
         dotStatus.setActivated(false);
         dotStatus.setSelected(false);
         txtStatFps.setText("");
         txtStatPing.setText("");
+        renderControls(); // connected is false: folds the bar and hides the handle
+        root.setPadding(0, 0, 0, 0); // no dock while idle
         exitImmersive();
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
     }
@@ -385,7 +455,10 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
             return;
         }
         int rw = root.getWidth();
-        int rh = root.getHeight();
+        // A docked (PUSH) control bar claims this much of the bottom; the
+        // video letterboxes into what is left, which is what "push the
+        // screen up" means in practice.
+        int rh = root.getHeight() - root.getPaddingBottom();
         if (rw <= 0 || rh <= 0) {
             return;
         }
@@ -443,15 +516,27 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
         if (immersive) {
             return;
         }
-        immersive = true;
-        panelConnect.setVisibility(View.GONE);
-        txtOverlay.setVisibility(View.GONE);
-        // Two knobs have to agree here: the window stops insetting the content
-        // (setDecorFitsSystemWindows) *and* the root stops consuming insets
-        // (fitsSystemWindows). Leaving the XML attribute on while the window is
-        // unconstrained would keep padding the video away from the edges.
-        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-        root.setFitsSystemWindows(false);
+        hideSystemBars();
+    }
+
+    /**
+     * Hides the bars (and, when needed, flips the window into the unconstrained
+     * mode they agree on). Split out because the Full screen button calls it
+     * to undo a transient edge-swipe without re-running everything else.
+     *
+     * <p>Two knobs have to agree here: the window stops insetting the content
+     * (setDecorFitsSystemWindows) *and* the root stops consuming insets
+     * (fitsSystemWindows). Leaving the XML attribute on while the window is
+     * unconstrained would keep padding the video away from the edges.
+     */
+    private void hideSystemBars() {
+        if (!immersive) {
+            immersive = true;
+            panelConnect.setVisibility(View.GONE);
+            txtOverlay.setVisibility(View.GONE);
+            WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+            root.setFitsSystemWindows(false);
+        }
         WindowInsetsControllerCompat controller =
                 WindowCompat.getInsetsController(getWindow(), root);
         controller.hide(WindowInsetsCompat.Type.systemBars());
@@ -474,70 +559,427 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
         root.setFitsSystemWindows(true);
     }
 
-    // --------------------------------------------------------------------------
-    // Touch forwarding (the control channel - injection is milestone 2)
+    // ----------------------------------------------------------controls--
+    // The three-state control bar: UNEXPANDED (one handle), ONE_LINE (the
+    // chosen row between x and a) and FULL (the chosen buttons wrapping,
+    // plus Settings / Full screen). Pure rules in ControlsConfig, storage in
+    // the guest_controls prefs, pixels here.
     // --------------------------------------------------------------------------
 
-    /**
-     * Captures taps and drags on the mirrored picture and ships them to the host as
-     * normalised coordinates (0..10000 of the view's width/height).
-     *
-     * <p>Normalised rather than pixels because the guest's screen and the host's
-     * capture almost never share a resolution, and letterbox offsets must not leak into
-     * the coordinates. The host multiplies by its own display size on injection.
-     *
-     * <p>Injection itself is the next milestone: an ordinary app cannot write into
-     * another app's input stream, so the host will need an AccessibilityService
-     * ({@code dispatchGesture}) or a shell-level helper. The transport already works end
-     * to end - watch the host's log to see every touch arrive.
-     */
-    /**
-     * The four host-navigation buttons (back / home / recents / notification shade).
-     * They live in the layout, overlay the video corner, and talk to the HOST phone:
-     * a letterboxed stream cannot express an edge swipe - the finger would have to
-     * start on the host screen's true edge, and the video rarely reaches it - so the
-     * gesture becomes a command instead.
-     */
-    private void setupSystemControls() {
-        findViewById(R.id.btnNavBack).setOnClickListener(v ->
-                controller.sendGlobalAction(GhostProtocol.GLOBAL_BACK));
-        findViewById(R.id.btnNavHome).setOnClickListener(v ->
-                controller.sendGlobalAction(GhostProtocol.GLOBAL_HOME));
-        findViewById(R.id.btnNavRecents).setOnClickListener(v ->
-                controller.sendGlobalAction(GhostProtocol.GLOBAL_RECENTS));
-        findViewById(R.id.btnNavShade).setOnClickListener(v ->
-                controller.sendGlobalAction(GhostProtocol.GLOBAL_NOTIFICATIONS));
-        findViewById(R.id.btnNavRotate).setOnClickListener(v -> {
-            // Not an AccessibilityService action - a GhostHand command (100+) that
-            // makes the host flip its own screen. The host's log records it even if
-            // its activity is stopped and misses the broadcast.
-            controller.sendGlobalAction(GhostProtocol.GLOBAL_ROTATE);
-            appendLog("asked the host to rotate");
-        });
-        findViewById(R.id.btnClipToHost).setOnClickListener(v -> {
-            String mine = readClipboard();
-            if (mine.isEmpty()) {
-                appendLog("clipboard is empty - nothing to send");
-                return;
+    /** id -> label, in canonical display order (shared with the settings page). */
+    private void setupControlRegistry() {
+        buttonLabels.put("back", R.string.guest_nav_back);
+        buttonLabels.put("home", R.string.guest_nav_home);
+        buttonLabels.put("recents", R.string.guest_nav_recents);
+        buttonLabels.put("shade", R.string.guest_nav_shade);
+        buttonLabels.put("rotate", R.string.guest_nav_rotate);
+        buttonLabels.put("clip_to", R.string.guest_clip_to_host);
+        buttonLabels.put("clip_from", R.string.guest_clip_from_host);
+        buttonLabels.put("compose", R.string.guest_clip_compose);
+        buttonLabels.put("vol_up", R.string.guest_nav_vol_up);
+        buttonLabels.put("vol_down", R.string.guest_nav_vol_down);
+        buttonLabels.put("media", R.string.guest_nav_media);
+    }
+
+    private void loadControlPrefs() {
+        controlPrefs = getSharedPreferences(CONTROL_PREFS, MODE_PRIVATE);
+        oneLineIds.clear();
+        oneLineIds.addAll(ControlsConfig.parseIds(controlPrefs.getString(
+                "one_line", joinCsv(ControlsConfig.DEFAULT_ONE_LINE))));
+        expandedIds.clear();
+        expandedIds.addAll(ControlsConfig.parseIds(controlPrefs.getString(
+                "expanded", joinCsv(ControlsConfig.DEFAULT_EXPANDED))));
+        dockOneLine = dockOf(controlPrefs.getInt("mode_one_line",
+                ControlsConfig.Dock.FLOAT.ordinal()));
+        dockExpanded = dockOf(controlPrefs.getInt("mode_expanded",
+                ControlsConfig.Dock.FLOAT.ordinal()));
+        try {
+            ctrlState = ControlsConfig.State.valueOf(controlPrefs.getString(
+                    "state", ControlsConfig.State.ONE_LINE.name()));
+        } catch (IllegalArgumentException e) {
+            ctrlState = ControlsConfig.State.ONE_LINE;
+        }
+    }
+
+    private static ControlsConfig.Dock dockOf(int ordinal) {
+        return ordinal == ControlsConfig.Dock.PUSH.ordinal()
+                ? ControlsConfig.Dock.PUSH : ControlsConfig.Dock.FLOAT;
+    }
+
+    private static String joinCsv(String[] ids) {
+        StringBuilder sb = new StringBuilder();
+        for (String id : ids) {
+            if (sb.length() > 0) {
+                sb.append(',');
             }
-            controller.sendClipboard(mine, true);
-            appendLog("clipboard sent to host (" + mine.length() + " chars)");
-        });
-        findViewById(R.id.btnClipFromHost).setOnClickListener(v -> {
-            controller.requestClipboard();
-            appendLog("asked the host for its clipboard");
-        });
-        findViewById(R.id.btnClipCompose).setOnClickListener(v -> {
-            if (!connected) {
-                appendLog("connect to a host first - text is sent over the session");
-                return;
+            sb.append(id);
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Every button's action, one map. Navigation goes out as a GhostHand
+     * command (never a synthetic swipe); volume and play/pause are commands
+     * the host answers with TYPE_HOST_TEXT, which lands in the HUD.
+     */
+    private void onControlButton(String id) {
+        switch (id) {
+            case "back":
+                controller.sendGlobalAction(GhostProtocol.GLOBAL_BACK);
+                break;
+            case "home":
+                controller.sendGlobalAction(GhostProtocol.GLOBAL_HOME);
+                break;
+            case "recents":
+                controller.sendGlobalAction(GhostProtocol.GLOBAL_RECENTS);
+                break;
+            case "shade":
+                controller.sendGlobalAction(GhostProtocol.GLOBAL_NOTIFICATIONS);
+                break;
+            case "rotate":
+                // Not an AccessibilityService action - a GhostHand command (100+)
+                // that makes the host flip its own screen.
+                controller.sendGlobalAction(GhostProtocol.GLOBAL_ROTATE);
+                appendLog("asked the host to rotate");
+                break;
+            case "vol_up":
+                controller.sendGlobalAction(GhostProtocol.GLOBAL_VOLUME_UP);
+                break;
+            case "vol_down":
+                controller.sendGlobalAction(GhostProtocol.GLOBAL_VOLUME_DOWN);
+                break;
+            case "media":
+                controller.sendGlobalAction(GhostProtocol.GLOBAL_MEDIA_TOGGLE);
+                appendLog("asked the host to play/pause");
+                break;
+            case "clip_to": {
+                String mine = readClipboard();
+                if (mine.isEmpty()) {
+                    appendLog("clipboard is empty - nothing to send");
+                    return;
+                }
+                controller.sendClipboard(mine, true);
+                appendLog("clipboard sent to host (" + mine.length() + " chars)");
+                break;
             }
-            composer.open(this, text -> {
-                controller.sendClipboard(text, true);
-                appendLog("clipboard sent to host (" + text.length() + " chars)");
-            });
+            case "clip_from":
+                controller.requestClipboard();
+                appendLog("asked the host for its clipboard");
+                break;
+            case "compose":
+                if (!connected) {
+                    appendLog("connect to a host first - text is sent over the session");
+                    return;
+                }
+                composer.open(this, text -> {
+                    controller.sendClipboard(text, true);
+                    appendLog("clipboard sent to host (" + text.length() + " chars)");
+                });
+                break;
+            default:
+                break;
+        }
+    }
+
+    private View makeButton(String id) {
+        TextView b = (TextView) LayoutInflater.from(this)
+                .inflate(R.layout.item_control_button, controlsBar, false);
+        Integer label = buttonLabels.get(id);
+        b.setText(label == null ? id : getString(label));
+        b.setOnClickListener(v -> onControlButton(id));
+        return b;
+    }
+
+    private View makeStructural(String label, View.OnClickListener onClick) {
+        TextView b = (TextView) LayoutInflater.from(this)
+                .inflate(R.layout.item_control_button, controlsBar, false);
+        b.setText(label);
+        b.setOnClickListener(onClick);
+        return b;
+    }
+
+    /** Rebuilds the bar for the current state, selections and dock modes. */
+    private void renderControls() {
+        controlsBar.removeAllViews();
+        if (!connected) {
+            controlsBar.setVisibility(View.GONE);
+            btnHandle.setVisibility(View.GONE);
+            updateDocking();
+            return;
+        }
+        btnHandle.setVisibility(ctrlState == ControlsConfig.State.UNEXPANDED
+                ? View.VISIBLE : View.GONE);
+        controlsBar.setVisibility(ctrlState == ControlsConfig.State.UNEXPANDED
+                ? View.GONE : View.VISIBLE);
+        if (ctrlState == ControlsConfig.State.ONE_LINE) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.addView(makeStructural(getString(R.string.guest_controls_close),
+                    v -> setState(ControlsConfig.State.UNEXPANDED)));
+            for (String id : ControlsConfig.buttonsFor(ctrlState, oneLineIds, expandedIds)) {
+                row.addView(makeButton(id));
+            }
+            row.addView(makeStructural(getString(R.string.guest_controls_expand),
+                    v -> setState(ControlsConfig.State.FULL)));
+            controlsBar.addView(row);
+        } else if (ctrlState == ControlsConfig.State.FULL) {
+            LinearLayout col = new LinearLayout(this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            List<String> ids = ControlsConfig.buttonsFor(ctrlState, oneLineIds, expandedIds);
+            boolean landscape = getResources().getConfiguration().orientation
+                    == Configuration.ORIENTATION_LANDSCAPE;
+            int perRow = landscape ? 6 : 4;
+            for (int i = 0; i < ids.size(); i += perRow) {
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                for (int j = i; j < Math.min(i + perRow, ids.size()); j++) {
+                    row.addView(makeButton(ids.get(j)));
+                }
+                col.addView(row);
+            }
+            LinearLayout struct = new LinearLayout(this);
+            struct.setOrientation(LinearLayout.HORIZONTAL);
+            struct.setGravity(Gravity.CENTER);
+            struct.addView(makeStructural(getString(R.string.guest_controls_collapse),
+                    v -> setState(ControlsConfig.State.ONE_LINE)));
+            struct.addView(makeStructural(getString(R.string.guest_settings),
+                    v -> panelSettings.setVisibility(View.VISIBLE)));
+            struct.addView(makeStructural(
+                    getString(fullscreenClean ? R.string.guest_windowed
+                            : R.string.guest_fullscreen),
+                    this::onFullscreenClick));
+            col.addView(struct);
+            controlsBar.addView(col);
+        }
+        updateDocking();
+    }
+
+    private void setState(ControlsConfig.State state) {
+        ctrlState = state;
+        if (controlPrefs != null) {
+            controlPrefs.edit().putString("state", state.name()).apply();
+        }
+        renderControls();
+        if (state == ControlsConfig.State.UNEXPANDED) {
+            if (fullscreenClean) {
+                hideStatusPill(true);
+            }
+        } else {
+            // Expanding is the user asking for the controls - show the status
+            // again while they decide, then let the auto-hide take over.
+            showStatusPill();
+        }
+    }
+
+    /**
+     * The one-tap clean view the "Full screen" button gives: hide any bars an
+     * edge swipe brought back, fold the controls, fade the pill. The corner
+     * handle stays (a few dp) so there is always a way back.
+     */
+    private void onFullscreenClick(View ignored) {
+        toggleFullscreen();
+    }
+
+    private void toggleFullscreen() {
+        fullscreenClean = !fullscreenClean;
+        if (fullscreenClean) {
+            hideSystemBars();
+            setState(ControlsConfig.State.UNEXPANDED);
+        } else {
+            showStatusPill();
+            renderControls(); // back in FULL: refresh the button label
+        }
+    }
+
+    /**
+     * Docks or floats the bar. PUSH gives it the full width at the bottom and
+     * reserves its height out of the root, so the letterbox math in
+     * {@link #applyVideoAspect()} genuinely pushes the picture up; FLOAT is the
+     * old draggable pill, untouched.
+     */
+    private void updateDocking() {
+        boolean docked = ctrlState != ControlsConfig.State.UNEXPANDED
+                && dockFor(ctrlState) == ControlsConfig.Dock.PUSH;
+        dockedNow = docked;
+        controlsBar.setDragEnabled(!docked);
+        FrameLayout.LayoutParams lp =
+                (FrameLayout.LayoutParams) controlsBar.getLayoutParams();
+        if (lp == null) {
+            return;
+        }
+        lp.width = docked ? ViewGroup.LayoutParams.MATCH_PARENT
+                : ViewGroup.LayoutParams.WRAP_CONTENT;
+        lp.gravity = docked ? Gravity.BOTTOM : (Gravity.BOTTOM | Gravity.END);
+        controlsBar.setBackgroundResource(docked ? R.drawable.bg_dock : R.drawable.bg_pill);
+        if (docked) {
+            controlsBar.setTranslationX(0f);
+            controlsBar.setTranslationY(0f);
+        }
+        controlsBar.setLayoutParams(lp);
+        controlsBar.post(() -> {
+            int pad = docked ? controlsBar.getHeight() + lp.bottomMargin : 0;
+            if (root.getPaddingBottom() != pad) {
+                root.setPadding(0, 0, 0, pad);
+            }
+            applyVideoAspect();
         });
     }
+
+    private ControlsConfig.Dock dockFor(ControlsConfig.State state) {
+        return state == ControlsConfig.State.ONE_LINE ? dockOneLine : dockExpanded;
+    }
+
+    // ------------------------- status pill / HUD ---------------------------
+
+    /**
+     * The connected pill used to sit on the video for the whole session.
+     * Now: fully visible for four seconds (and whenever the user touches it),
+     * then faded out; a tap anywhere on it brings it back or sends it away.
+     * alpha 0 still receives taps - which is exactly what makes the faded
+     * state a reveal gesture instead of a dead zone.
+     */
+    private void setupStatusPill() {
+        statusPill.setOnClickListener(v -> {
+            if (statusPill.getAlpha() < 0.5f) {
+                showStatusPill();
+            } else {
+                hideStatusPill(true);
+            }
+        });
+        btnHandle.setOnClickListener(v -> setState(ControlsConfig.State.ONE_LINE));
+    }
+
+    private void showStatusPill() {
+        pillHandler.removeCallbacks(pillHideTick);
+        statusPill.animate().cancel();
+        statusPill.setAlpha(1f);
+        if (connected) {
+            pillHandler.postDelayed(pillHideTick, 4_000L);
+        }
+    }
+
+    private void hideStatusPill(boolean now) {
+        pillHandler.removeCallbacks(pillHideTick);
+        if (!connected) {
+            return;
+        }
+        statusPill.animate().cancel();
+        statusPill.animate().alpha(0f).setDuration(now ? 120L : 300L).start();
+    }
+
+    /** Transient overlay for host answers (volume %, play/pause ack). */
+    private void showHud(String text) {
+        txtHud.setText(text);
+        txtHud.setVisibility(View.VISIBLE);
+        hudHandler.removeCallbacks(hudHideTick);
+        hudHandler.postDelayed(hudHideTick, 1_500L);
+    }
+
+    // --------------------------- settings page -----------------------------
+
+    /**
+     * Built at runtime from ControlsConfig.BUTTON_IDS so the checkbox lists
+     * can never drift from the buttons that actually exist. Two independent
+     * radio groups (one-line / expanded, each float-or-dock) plus a checkbox
+     * per button per state; every change saves and re-renders immediately.
+     */
+    private void buildSettingsPanel() {
+        settingsContent.removeAllViews();
+        settingsContent.addView(header(getString(R.string.guest_settings_title), 0));
+
+        settingsContent.addView(header(getString(R.string.guest_settings_one_line), 1));
+        settingsContent.addView(dockGroup(true));
+
+        settingsContent.addView(header(getString(R.string.guest_settings_expanded), 1));
+        settingsContent.addView(dockGroup(false));
+
+        settingsContent.addView(
+                header(getString(R.string.guest_settings_buttons_one_line), 1));
+        addCheckboxes(settingsContent, oneLineIds);
+
+        settingsContent.addView(
+                header(getString(R.string.guest_settings_buttons_expanded), 1));
+        addCheckboxes(settingsContent, expandedIds);
+
+        TextView done = (TextView) LayoutInflater.from(this)
+                .inflate(R.layout.item_control_button, settingsContent, false);
+        done.setText(R.string.guest_settings_done);
+        done.setTextSize(14f);
+        done.setPadding(0, dp(14), 0, dp(6));
+        done.setOnClickListener(v -> panelSettings.setVisibility(View.GONE));
+        settingsContent.addView(done);
+    }
+
+    private TextView header(String text, int first) {
+        TextView h = new TextView(this);
+        h.setText(text);
+        h.setTextSize(14f);
+        h.setTypeface(null, android.graphics.Typeface.BOLD);
+        h.setTextColor(0xFFFFFFFF);
+        h.setPadding(0, dp(first == 0 ? 0 : 18), 0, dp(6));
+        return h;
+    }
+
+    private RadioGroup dockGroup(final boolean forOneLine) {
+        RadioGroup g = new RadioGroup(this);
+        g.setOrientation(RadioGroup.HORIZONTAL);
+        ControlsConfig.Dock current = forOneLine ? dockOneLine : dockExpanded;
+        RadioButton floatBtn = new RadioButton(this);
+        floatBtn.setId(View.generateViewId());
+        floatBtn.setText(R.string.guest_settings_float);
+        floatBtn.setChecked(current == ControlsConfig.Dock.FLOAT);
+        RadioButton pushBtn = new RadioButton(this);
+        pushBtn.setId(View.generateViewId());
+        pushBtn.setText(R.string.guest_settings_push);
+        pushBtn.setChecked(current == ControlsConfig.Dock.PUSH);
+        g.addView(floatBtn);
+        g.addView(pushBtn);
+        g.setOnCheckedChangeListener((group, checkedId) -> {
+            boolean push = checkedId == pushBtn.getId();
+            ControlsConfig.Dock dock = push
+                    ? ControlsConfig.Dock.PUSH : ControlsConfig.Dock.FLOAT;
+            if (forOneLine) {
+                dockOneLine = dock;
+            } else {
+                dockExpanded = dock;
+            }
+            controlPrefs.edit()
+                    .putInt(forOneLine ? "mode_one_line" : "mode_expanded", dock.ordinal())
+                    .apply();
+            renderControls();
+        });
+        return g;
+    }
+
+    private void addCheckboxes(LinearLayout c, final Set<String> selection) {
+        for (final String id : ControlsConfig.BUTTON_IDS) {
+            CheckBox cb = new CheckBox(this);
+            Integer label = buttonLabels.get(id);
+            cb.setText(label == null ? id : getString(label));
+            cb.setChecked(selection.contains(id));
+            cb.setOnCheckedChangeListener((button, checked) -> {
+                if (checked) {
+                    selection.add(id);
+                } else {
+                    selection.remove(id);
+                }
+                controlPrefs.edit()
+                        .putString(selection == oneLineIds ? "one_line" : "expanded",
+                                ControlsConfig.toCsv(selection))
+                        .apply();
+                renderControls();
+            });
+            c.addView(cb);
+        }
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    // ------------------------------------------------------------------------
 
     /** Current clipboard text, or "" when empty (KitKat-safe, never throws). */
     private String readClipboard() {
@@ -583,6 +1025,9 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
         final android.content.SharedPreferences prefs =
                 getSharedPreferences("guest_ui", MODE_PRIVATE);
         controlsBar.setListener(() -> {
+            if (dockedNow) {
+                return; // a docked bar has no free position to remember
+            }
             float[] f = controlsBar.getPositionFractions();
             prefs.edit()
                     .putFloat("controls_fx", f[0])
@@ -591,7 +1036,7 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
             appendLog("controls moved - drag the bar again to reposition");
         });
         controlsBar.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or2, ob) -> {
-            if (v.getVisibility() != View.VISIBLE) {
+            if (v.getVisibility() != View.VISIBLE || dockedNow) {
                 return;
             }
             controlsBar.applyPosition(
@@ -600,6 +1045,17 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
         });
     }
 
+    /**
+     * Captures taps and drags on the mirrored picture and ships them to the
+     * host as normalised coordinates (0..10000 of the view's width/height) -
+     * normalised because the two screens almost never share a resolution and
+     * letterbox offsets must not leak in. The host injects them (live via
+     * Shizuku, or replays the drag with dispatchGesture at lift-off).
+     *
+     * <p>The control bar, handle, pill, HUD and settings panel all live OUTSIDE
+     * videoContainer, so anything they cover is consumed here and never
+     * reaches the host.
+     */
     private void setupTouchForwarding() {
         videoContainer.setOnTouchListener((view, event) -> {
             if (!connected || streamWidth <= 0 || streamHeight <= 0) {
@@ -671,7 +1127,8 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
             streamHeight = height;
         }
         appendLog("connected to '" + hostName + "' " + streamWidth + "x" + streamHeight);
-        findViewById(R.id.controlsBar).setVisibility(View.VISIBLE);
+        renderControls();
+        showStatusPill();
         btnConnect.setEnabled(false);
         btnDisconnect.setEnabled(true);
         txtStatus.setText(getString(R.string.guest_status_connected) + " · " + hostName);
@@ -739,6 +1196,14 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
         connected = false;
         stopDecoder(reason);
         renderIdle();
+    }
+
+    @Override
+    public void onHostText(String text) {
+        // The host answering a volume or media command: show it as a HUD for
+        // a beat and keep it in the session log for the record.
+        appendLog("host: " + text);
+        showHud(text);
     }
 
     @Override

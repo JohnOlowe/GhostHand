@@ -129,6 +129,13 @@ public class GuestController {
          * must not be touched in that case. Main thread.
          */
         void onPeerClipboard(String text, boolean ok);
+
+        /**
+         * A status line from the host - the answer to a volume or play/pause
+         * command ("volume 63%", "play/pause needs Shizuku - ..."). Main thread.
+         * The guest shows it both as a HUD and in the session log.
+         */
+        void onHostText(String text);
     }
 
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -451,6 +458,12 @@ public class GuestController {
                 final String text = c.getString("text", "");
                 final boolean ok = c.getInt("ok", 0) != 0;
                 main.post(() -> listener.onPeerClipboard(text, ok));
+                break;
+            }
+            case GhostProtocol.TYPE_HOST_TEXT: {
+                Record t = frame.asRecord();
+                final String text = t.getString("text", "");
+                main.post(() -> listener.onHostText(text));
                 break;
             }
             case GhostProtocol.TYPE_GEOMETRY: {

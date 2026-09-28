@@ -13,6 +13,7 @@ import android.content.pm.ServiceInfo;
 import android.content.res.Configuration;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
+import android.media.AudioManager;
 import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
 import android.os.Build;
@@ -32,6 +33,7 @@ import androidx.core.app.NotificationManagerCompat;
 
 import damjay.control.ghosthand.HostActivity;
 import damjay.control.ghosthand.R;
+import damjay.control.ghosthand.guest.ControlsConfig;
 import damjay.control.ghosthand.net.Frame;
 import damjay.control.ghosthand.net.GhostProtocol;
 import damjay.control.ghosthand.net.Record;
@@ -842,6 +844,12 @@ public class ScreenCaptureService extends Service
      */
     @Override
     public void onGuestGlobalAction(String clientName, int action) {
+        if (action == GhostProtocol.GLOBAL_VOLUME_UP
+                || action == GhostProtocol.GLOBAL_VOLUME_DOWN
+                || action == GhostProtocol.GLOBAL_MEDIA_TOGGLE) {
+            handleMediaCommand(clientName, action);
+            return;
+        }
         if (action == GhostProtocol.GLOBAL_ROTATE) {
             // Not an AccessibilityService action. Two ways to honour it, best first:
             // shell (system-wide, works over any app) when Shizuku is granted,
@@ -900,6 +908,54 @@ public class ScreenCaptureService extends Service
         android.graphics.Point p = new android.graphics.Point();
         wm.getDefaultDisplay().getRealSize(p);
         return new int[] { p.x, p.y };
+    }
+
+    /**
+     * Volume and play/pause buttons from a guest.
+     *
+     * <p>Volume is an app-level {@link android.media.AudioManager} call: it
+     * needs only the normal MODIFY_AUDIO_SETTINGS permission, so it works on
+     * every host this app supports - KitKat included - with no accessibility
+     * service and no Shizuku. The new level is sent back as TYPE_HOST_TEXT so
+     * the guest can draw a percentage HUD (only the host knows the real level).
+     *
+     * <p>Play/pause must inject KEYCODE_MEDIA_PLAY_PAUSE (85), and injecting
+     * keys needs INJECT_EVENTS - which is exactly the shell user's privilege.
+     * So it rides the Shizuku path and says out loud when it cannot run,
+     * instead of pressing a button that silently does nothing.
+     */
+    private void handleMediaCommand(String clientName, int action) {
+        if (action == GhostProtocol.GLOBAL_MEDIA_TOGGLE) {
+            log("guest " + clientName + " pressed play/pause");
+            if (ElevatedShell.probe() != ElevatedShell.State.GRANTED) {
+                replyHostText("play/pause needs Shizuku - grant it on the host");
+                return;
+            }
+            ElevatedShell.run("input keyevent 85", (exit, out) ->
+                    replyHostText(exit == 0
+                            ? "play/pause sent"
+                            : "play/pause failed (exit " + exit + ")"));
+            return;
+        }
+        AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
+        if (am == null) {
+            return;
+        }
+        int dir = action == GhostProtocol.GLOBAL_VOLUME_UP
+                ? AudioManager.ADJUST_RAISE : AudioManager.ADJUST_LOWER;
+        am.adjustStreamVolume(AudioManager.STREAM_MUSIC, dir, 0);
+        int vol = am.getStreamVolume(AudioManager.STREAM_MUSIC);
+        int max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+        log("volume " + vol + "/" + max + " from " + clientName);
+        replyHostText("volume " + ControlsConfig.volumePct(vol, max) + "%");
+    }
+
+    /** Host -> guest status line; enqueued, so any thread may call it. */
+    private void replyHostText(String text) {
+        ClientHub h = hub;
+        if (h != null && h.isRunning()) {
+            main.post(() -> h.hostText(text));
+        }
     }
 
     private static String actionName(int action) {

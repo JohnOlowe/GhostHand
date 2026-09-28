@@ -86,6 +86,14 @@ public final class GhostProtocol {
     public static final byte TYPE_CLIPBOARD_GET = 12;
     /** Either direction: "set your clipboard to this". Record{text, ok}. */
     public static final byte TYPE_CLIPBOARD_SET = 13;
+    /**
+     * Host -> guest only: a short status line for the guest's log and HUD -
+     * the acknowledgement of a volume or media command ("volume 63%",
+     * "play/pause sent"), and honest failures ("play/pause needs Shizuku").
+     * Record{text}. Volume needs this because only the host knows the real
+     * level; media needs it because shell injection can fail silently.
+     */
+    public static final byte TYPE_HOST_TEXT = 14;
 
     // Wire codes for TYPE_GLOBAL_ACTION. They deliberately equal
     // AccessibilityService.GLOBAL_ACTION_* on every platform this app hosts on
@@ -106,6 +114,16 @@ public final class GhostProtocol {
      * (5 is QUICK_SETTINGS there) - commands live at 100+.
      */
     public static final int GLOBAL_ROTATE = 100;
+    /**
+     * GhostHand commands at 100+: media keys. Volume is deliberately a command
+     * rather than a synthetic KeyEvent - the host applies it with AudioManager,
+     * which needs no permission on any API level, and answers with the new level
+     * as TYPE_HOST_TEXT so the guest can show a HUD.
+     */
+    public static final int GLOBAL_VOLUME_UP = 101;
+    public static final int GLOBAL_VOLUME_DOWN = 102;
+    /** Play/pause the host's current media session (shell keyevent, needs Shizuku). */
+    public static final int GLOBAL_MEDIA_TOGGLE = 103;
 
     /**
      * Clipboard text crossing the wire is capped far below {@link #MAX_PAYLOAD}:
@@ -178,6 +196,7 @@ public final class GhostProtocol {
             case TYPE_GLOBAL_ACTION: return "GLOBAL_ACTION";
             case TYPE_CLIPBOARD_GET: return "CLIPBOARD_GET";
             case TYPE_CLIPBOARD_SET: return "CLIPBOARD_SET";
+            case TYPE_HOST_TEXT: return "HOST_TEXT";
             default: return "UNKNOWN(" + type + ")";
         }
     }

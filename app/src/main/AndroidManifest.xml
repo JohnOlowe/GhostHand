@@ -12,6 +12,10 @@
 
     <!-- Sockets: the host listens on a TCP port, the guest dials it. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Volume buttons: AudioManager.adjustStreamVolume needs only this
+         normal-level permission, which is what makes Vol+/Vol- work with no
+         accessibility service and no Shizuku on any supported host. -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <!-- Reading WiFi state / interfaces so the host can print "connect to 192.168.x.x". -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />

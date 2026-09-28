@@ -82,18 +82,23 @@ public final class ElevatedShell {
     }
 
     /**
-     * Asks Shizuku to show its own permission dialog for this package. No-op
-     * when the server is not running (nothing could show the dialog anyway).
+     * Asks Shizuku to show its own permission dialog for this package.
+     * Returns whether the request was actually dispatched - the caller shows
+     * that answer in the UI, because "pressed Grant and nothing happened" is
+     * precisely the silence we must never produce. No-op (false) when the
+     * server is not running: nothing could show the dialog anyway.
      */
-    public static void requestPermission() {
+    public static boolean requestPermission() {
         try {
             if (!Shizuku.isPreV11() && Shizuku.pingBinder()
                     && Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
                 Shizuku.requestPermission(0x5A12);
+                return true;
             }
         } catch (Throwable t) {
             Log.i(TAG, "shizuku request failed: " + t);
         }
+        return false;
     }
 
     /**

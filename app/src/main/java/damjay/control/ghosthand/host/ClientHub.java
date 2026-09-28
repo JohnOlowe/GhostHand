@@ -277,6 +277,21 @@ public class ClientHub implements ClientConnection.Listener {
         broadcast(buildClipboardSetFrame(text, ok));
     }
 
+    /**
+     * Frame carrying a short host->guest status line (volume level, media
+     * acknowledgement, honest failures). The guest shows it as a HUD and in
+     * its log - the only direction where the host talks back in words.
+     */
+    public static Frame buildHostTextFrame(String text) {
+        Record r = Record.create().putString("text", text);
+        return new Frame(GhostProtocol.TYPE_HOST_TEXT, (byte) 0, 0L, r.toBytes());
+    }
+
+    /** Send a status line to every guest. Safe from any thread (queue append). */
+    public void hostText(String text) {
+        broadcast(buildHostTextFrame(text));
+    }
+
     /** Builds the VIDEO_CONFIG frame from an Annex-B SPS+PPS blob. */
     public static Frame buildVideoConfigFrame(byte[] annexBConfig) {
         List<byte[]> nals = ScreenEncoder.splitStartCodes(annexBConfig);

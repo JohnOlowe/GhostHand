@@ -33,7 +33,7 @@ Package `damjay.control.ghosthand` · **minSdk 19 (Android 4.4)** · targetSdk 3
 ```bash
 git clone https://github.com/JohnOlowe/GhostHand.git
 cd GhostHand
-bash build.sh                 # setup + AndroidX + 102 unit tests + signed APK (~2.5 min cold)
+bash build.sh                 # setup + AndroidX + 108 unit tests + signed APK (~2.5 min cold)
 ```
 
 `build.sh` installs the toolchain into `toolchain/vendor` (JRE, Eclipse compiler, aapt2,
@@ -336,9 +336,10 @@ what `DataInputStream` and `ByteBuffer` do by default.
 | 8 | `GEOMETRY` | host -> guest | `Record{w, h, rotation}` after a rotate/resize |
 | 9 | `STATS` | host -> guest | `Record{fps, kbps, dropped, clients, uptimeMs}` |
 | 10 | `BYE` | either | UTF-8 reason |
-| 11 | `GLOBAL_ACTION` | guest -> host | `Record{action}` - 1 back, 2 home, 3 recents, 4 notification shade: the host's navigation bar as four buttons. Code **100** is GhostHand's own `rotate` command: outside AccessibilityService's 1..5 (5 there = quick settings), so it can never be handed to `performGlobalAction` by accident |
+| 11 | `GLOBAL_ACTION` | guest -> host | `Record{action}` - 1 back, 2 home, 3 recents, 4 notification shade: the host's navigation bar as four buttons. Codes **100+** are GhostHand's own commands, outside AccessibilityService's 1..5 (5 there = quick settings) so they can never be handed to `performGlobalAction` by accident: **100** rotate, **101** volume up, **102** volume down, **103** play/pause |
 | 12 | `CLIPBOARD_GET` | either | empty payload - "give me your clipboard"; answered with one `CLIPBOARD_SET` |
 | 13 | `CLIPBOARD_SET` | either | `Record{text, ok}` - `ok = 0` means "I could not read mine" and must never overwrite the receiver's copy; `text` is UTF-8 capped at 64 KB (`clipText()` truncates on a character boundary) |
+| 14 | `HOST_TEXT` | host -> guest | `Record{text}` - a short status line: the answer to a volume/media command ("volume 63%", "play/pause sent", or an honest "play/pause needs Shizuku"). The guest flashes it as a HUD and appends it to the session log |
 
 Design notes that matter:
 
@@ -516,10 +517,30 @@ the reader thread wakes up regularly: if **20 seconds** pass with no traffic in 
 direction, the guest declares the link dead and closes it, rather than showing a frozen last
 frame forever.
 
-### 4. Controls: navigation, rotation and the clipboard bridge
+### 4. Controls: the three-state bar, navigation, media and the clipboard bridge
 
-While connected, a two-row pill sits over the bottom-right of the video (immersive mode keeps
-it on screen, and taps on it are consumed so they never become touches on the host):
+While connected the guest shows a **three-state control bar** - the pure rules
+(state walk, per-state selections, dock modes, volume maths) live in
+`ControlsConfig` so they can be unit-tested without a device:
+
+* **Unexpanded** - only a small "▲" handle in the corner; nothing else covers
+  the picture. Tap it to open the one-line row.
+* **One line** - the buttons chosen for the one-line row, between "×" (fold
+  away) and "▲" (expand to full). One row, always.
+* **Full buttons** - every button chosen for the expanded panel, wrapping into
+  rows, plus the structural row: "▼" (back to one line), *Settings*, *Full
+  screen*.
+
+Both visible states independently choose how they meet the video: **float**
+(the draggable pill, anywhere over the picture) or **dock** - the bar takes a
+strip at the bottom and the letterbox maths shrink the video into what is
+left, so the picture genuinely pushes up. The two choices are stored
+separately, and the settings page (the *Settings* button in the expanded
+panel) is where each one is picked, next to a **checkbox per button per
+state**: eleven buttons exist, which subset shows in which row is the user's
+call. Everything persists in the `guest_controls` prefs.
+
+Buttons:
 
 * **Back / Home / Recents / Shade** - each sends `GLOBAL_ACTION` with the matching
   `AccessibilityService.GLOBAL_ACTION_*` number; the host's service calls
@@ -541,7 +562,12 @@ it on screen, and taps on it are consumed so they never become touches on the ho
   phone can do neither - so it is never a requirement: every path falls back to the
   window flip. A status row in the host's touch-control card states all of this in
   plain words (not installed / not running / tap Grant / granted) with one button
-  that always does the next useful thing.
+  that always does the next useful thing - and it means it: the row re-reads
+  itself at 1 Hz while the screen is up **and** on Shizuku's own
+  binder-received/binder-dead events, so starting Shizuku in another app (or
+  over adb) flips it live, every button press appends what it did to the host
+  log, and "Grant" answers with either "permission requested - approve the
+  dialog" or a reason it could not ask.
 
   The same grant also unlocks **live touch** (next section). The
   encoder then restarts at the new size (section 3 above), `GEOMETRY` flies out, and the
@@ -562,9 +588,29 @@ it on screen, and taps on it are consumed so they never become touches on the ho
   something new, then Send - the peer copies it automatically, same as a push. A real
   edit survives closing the dialog; an untouched prefill does not, so the next copied
   text is never shadowed by a stale draft. Send stays disabled while the box is empty.
-* **Move the bar** - the guest pill can be dragged anywhere over the video (press and
-  drag on it; the buttons still work, a drag only starts past the system touch slop).
-  The spot is stored as screen fractions, so it survives app restarts and rotation.
+* **Move the bar** - while a bar floats, it can be dragged anywhere over the video
+  (press and drag on it; the buttons still work, a drag only starts past the system
+  touch slop). The spot is stored as screen fractions, so it survives app restarts
+  and rotation. A docked bar is pinned by definition and refuses to be dragged.
+* **Vol+ / Vol-** - the host applies `AudioManager.adjustStreamVolume` on the music
+  stream: only the normal `MODIFY_AUDIO_SETTINGS` permission, so it works on every
+  supported host - KitKat included, accessibility off, Shizuku absent. The host
+  answers with the real level (`HOST_TEXT`), which the guest flashes as a HUD
+  ("volume 63%") and appends to the log: only the host knows the number, so it
+  has to say it.
+* **Play/Pause** - command 103; the host injects `KEYCODE_MEDIA_PLAY_PAUSE` through
+  the Shizuku shell (`input keyevent 85`), because injecting a key needs
+  `INJECT_EVENTS` - the shell user's privilege. With the grant the answer is
+  "play/pause sent"; without it, "play/pause needs Shizuku - grant it on the
+  host". The button always explains itself, never nothing.
+* **Full screen** - one tap for a clean view: re-hides any bars an edge swipe
+  brought back, folds the bar down to the corner handle, fades the status pill.
+  The handle stays, so there is always a way back (expand, then *Windowed*).
+* **The status pill fades** - it used to sit on the video for the whole session
+  ("the green dot covers the screen"). Now it is fully visible for four seconds
+  after connecting (and whenever touched), then fades out completely; a tap on
+  it brings it back or sends it away. alpha 0 still receives taps, which is what
+  makes the faded state a reveal gesture instead of a dead zone.
 
 ---
 
@@ -896,8 +942,8 @@ The rules it enforces, each born from a bug that happened in practice:
 A drag is dispatched on finger **lift**, not continuously. `dispatchGesture` posts a completed
 gesture, so a *live* drag (the host screen following your finger in real time) is not possible
 without streaming each segment - which would mean many small gestures and a visible stutter.
-This is the honest limitation of the no-root path and it is noted in the UI; the root/adb
-alternative (`input swipe`) is left for a later milestone.
+This is the honest limitation of the *no-grant* path; the granted path (`ShellTouch`, next
+section) streams every event as it arrives, and the UI says which one is active.
 
 ### The keep rule that saved the release build (a genuinely nasty one)
 
@@ -947,15 +993,15 @@ before anything is signed or shipped.
 
 ## Tests
 
-`net/`, `host/TouchInjector` and `util/ApiLevels` deliberately import nothing from
-`android.*`, so the wire format, the gesture planner **and the version policy** can be
-tested on a plain JVM - no device, no emulator:
+`net/`, `host/TouchInjector`, `guest/ControlsConfig` and `util/ApiLevels` deliberately
+import nothing from `android.*`, so the wire format, the gesture planner, the control-bar
+rules **and the version policy** can be tested on a plain JVM - no device, no emulator:
 
 ```bash
 bash toolchain/test.sh app --source 8
 # JUnit version 4.13.2
 # ...............................................................................
-# OK (102 tests)
+# OK (108 tests)
 ```
 
 What is covered:
@@ -970,7 +1016,8 @@ What is covered:
   ASCII, truncated blobs.
 * `GhostProtocolTest` - sizing maths (16-alignment for any screen/preset combination, aspect
   preservation, no upscaling, encoder minimums), bitrate clamp, and that header size, port,
-  service type and type numbers stay sane and distinct; that `GLOBAL_ROTATE` sits outside
+  service type and type numbers stay sane and distinct (including the new
+  `HOST_TEXT`); that `GLOBAL_ROTATE` and the media commands (101-103) sit outside
   AccessibilityService's 1..5 range; and that `clipText()` passes ordinary text through,
   truncates ASCII exactly at the cap, and never splits a multi-byte character (the raw cut
   lands inside a 3-byte `EUR` - the boundary back-off is what keeps U+FFFD off the other
@@ -987,6 +1034,11 @@ What is covered:
   `IInputManager.injectInputEvent`, pinned value by value (a wrong number would
   aim our parcel at a different input-service method) plus "unknown versions
   answer -1 instead of guessing".
+* `ControlsConfigTest` (6 tests) - the control bar's pure rules: the expand/collapse
+  walk (with its floors and ceilings), per-state button selection in canonical order,
+  settings CSV round-trips that drop unknown ids and deduplicate, first-run defaults
+  where the one-line row must be a subset of the expanded panel, unique registry ids,
+  and the HUD's volume percentage (rounded, clamped, and safe against a bogus max).
 * `FrameGateTest` (5 tests) - the freeze-vs-corruption switch on the host: after a drop
   only the next key frame gets through, control frames always pass, repeated drops stay
   closed, and a dropped key frame cannot "open" the gate by being dropped.
@@ -1030,6 +1082,9 @@ phones.
 | "Clipboard unavailable (Android 10+ blocks background reads)" | the host answered a pull while its window was in the background - that is the OS policy, and GhostHand fails honestly instead of overwriting your copy. Tap "From host"/"From guest" while the other phone has GhostHand open, or use push ("To host"/"To guest"), which always works. |
 | The video lags behind the action | lower the host's frame rate (capture settings: 20, or 15 on a bad link). Fewer frames per second into the same pipe = shallower queues = less end-to-end delay. |
 | Green blocks / shredded picture while scrolling fast (see `screenshots/`) | was vc8: a network drop left the guest decoding P-frames against a reference it never received. Fixed by the host-side `FrameGate` (freeze up to one key-frame interval instead of corruption). If it returns, check the host's `dropped` counter - and try the 480p preset, because a 2013 guest decoder can also struggle on high-motion 720p. |
+| The host's Shizuku row did not change after I started Shizuku | was vc10: the row only refreshed when the activity resumed, and "Grant" pressed while the row was stale did nothing. vc11 re-reads it at 1 Hz and on Shizuku's binder-received/binder-dead callbacks, and every button press logs its outcome - tap Grant and Shizuku's dialog appears (approve it in Shizuku). |
+| Play/Pause does nothing | it needs Shizuku: injecting a media key is shell work (`INJECT_EVENTS`). The host answers the press either way - "play/pause sent" or "needs Shizuku". Volume needs nothing of the sort: it is an `AudioManager` call and always works. |
+| Volume buttons do nothing on the host | the media stream may already be at its end (the HUD shows the level the host reports). If the HUD never appears, the session is not live - check the guest log for the `HOST_TEXT` answer. |
 | Guest Rotate does nothing while another app is in front | expected without Shizuku: the window-level flip only works with GhostHand in front. On Android 7+, install Shizuku, start it (wireless debugging on Android 11+, else USB adb - KitKat cannot run Shizuku at all), and grant the dialog GhostHand shows on the first rotate: rotation then becomes system-wide. |
 | `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | you are installing an APK signed with a different key. Every build here uses `keystore/damjay_debug.keystore`; delete the old app once and carry on. |
 | Notification missing on Android 13+ | `POST_NOTIFICATIONS` was denied. The stream still works; only the notification is hidden. |

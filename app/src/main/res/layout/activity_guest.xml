@@ -52,6 +52,7 @@
         android:layout_gravity="top|start"
         android:layout_margin="12dp"
         android:background="@drawable/bg_pill"
+        android:clickable="true"
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingHorizontal="12dp"
@@ -74,15 +75,12 @@
             android:textSize="12sp" />
     </LinearLayout>
 
-    <!-- Host navigation as four buttons: back, home, recents, notification shade.
-         They sit in the ROOT frame (not inside videoContainer), so their taps are
-         consumed here and never reach the touch-forwarding listener - everything
-         outside this bar still goes to the video, and hence to the host. Visible
-         only while connected; immersive mode keeps it on screen, which is exactly
-         when it is needed. -->
-    <!-- Draggable: press and drag anywhere on the pill to move it out of the
-         way of the video; the buttons still work as buttons (drag starts only
-         past the system touch slop). -->
+    <!-- The control bar. Dynamic: GuestActivity rebuilds its contents from the
+         user's settings every time the state changes - UNEXPANDED (nothing but
+         the ▼ handle), ONE_LINE (the chosen one-line row) or FULL (the chosen
+         buttons wrapping, plus Settings / Full screen). Draggable while it
+         floats over the video; pinned and undraggable while it docks and
+         pushes the video up. Buttons live in item_control_button.xml. -->
     <damjay.control.ghosthand.util.DraggableLayout
         android:id="@+id/controlsBar"
         android:layout_width="wrap_content"
@@ -92,113 +90,66 @@
         android:background="@drawable/bg_pill"
         android:orientation="vertical"
         android:padding="2dp"
+        android:visibility="gone" />
+
+    <!-- The collapsed state: a single tappable chevron in the corner. This is
+         the only chrome that survives "collapse everything" and full-screen
+         viewing, so there is always a way back. -->
+    <TextView
+        android:id="@+id/btnHandle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="10dp"
+        android:background="@drawable/bg_pill"
+        android:clickable="true"
+        android:focusable="true"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="8dp"
+        android:text="@string/guest_controls_expand"
+        android:textColor="@color/text_primary"
+        android:textSize="13sp"
+        android:visibility="gone" />
+
+    <!-- Transient HUD for host answers (volume percentage, play/pause ack).
+         Auto-hides; sits above the video, so it never blocks forwarding for
+         longer than a second and a half. -->
+    <TextView
+        android:id="@+id/txtHud"
+        style="@style/Text.Subtitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="46dp"
+        android:background="@drawable/bg_pill"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="8dp"
+        android:textColor="@color/text_primary"
+        android:visibility="gone" />
+
+    <!-- Full-screen settings page: per-state float/dock choice and the
+         per-button visibility checkboxes (built at runtime from the registry
+         in ControlsConfig, so the lists can never drift from the buttons). -->
+    <FrameLayout
+        android:id="@+id/panelSettings"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#E6101418"
         android:visibility="gone">
 
-        <!-- Row 1: system navigation + display rotation. -->
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true">
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnNavBack"
-            style="@style/Widget.Material3.Button.TextButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:minWidth="0dp"
-            android:paddingLeft="8dp"
-            android:paddingRight="8dp"
-            android:text="@string/guest_nav_back"
-            android:textSize="12sp" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnNavHome"
-            style="@style/Widget.Material3.Button.TextButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:minWidth="0dp"
-            android:paddingLeft="8dp"
-            android:paddingRight="8dp"
-            android:text="@string/guest_nav_home"
-            android:textSize="12sp" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnNavRecents"
-            style="@style/Widget.Material3.Button.TextButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:minWidth="0dp"
-            android:paddingLeft="8dp"
-            android:paddingRight="8dp"
-            android:text="@string/guest_nav_recents"
-            android:textSize="12sp" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnNavShade"
-            style="@style/Widget.Material3.Button.TextButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:minWidth="0dp"
-            android:paddingLeft="8dp"
-            android:paddingRight="8dp"
-            android:text="@string/guest_nav_shade"
-            android:textSize="12sp" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnNavRotate"
-            style="@style/Widget.Material3.Button.TextButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:minWidth="0dp"
-            android:paddingLeft="8dp"
-            android:paddingRight="8dp"
-            android:text="@string/guest_nav_rotate"
-            android:textSize="12sp" />
-        </LinearLayout>
-
-        <!-- Row 2: clipboard bridge - push mine / pull the host's. -->
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnClipToHost"
-                style="@style/Widget.Material3.Button.TextButton"
-                android:layout_width="wrap_content"
+            <LinearLayout
+                android:id="@+id/settingsContent"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:minWidth="0dp"
-                android:paddingLeft="8dp"
-                android:paddingRight="8dp"
-                android:text="@string/guest_clip_to_host"
-                android:textSize="12sp" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnClipFromHost"
-                style="@style/Widget.Material3.Button.TextButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:minWidth="0dp"
-                android:paddingLeft="8dp"
-                android:paddingRight="8dp"
-                android:text="@string/guest_clip_from_host"
-                android:textSize="12sp" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnClipCompose"
-                style="@style/Widget.Material3.Button.TextButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:minWidth="0dp"
-                android:paddingLeft="8dp"
-                android:paddingRight="8dp"
-                android:text="@string/guest_clip_compose"
-                android:textSize="12sp" />
-        </LinearLayout>
-    </damjay.control.ghosthand.util.DraggableLayout>
+                android:orientation="vertical"
+                android:padding="20dp" />
+        </ScrollView>
+    </FrameLayout>
 
     <!-- ===================== connect / detail panel ===================== -->
     <com.google.android.material.card.MaterialCardView

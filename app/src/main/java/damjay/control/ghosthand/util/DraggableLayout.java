@@ -35,7 +35,20 @@ public class DraggableLayout extends LinearLayout {
     private float startTx;
     private float startTy;
     private boolean dragging;
+    private boolean dragEnabled = true;
     private Listener listener;
+
+    /**
+     * Docked bars must not be draggable: a PUSH-mode bar is pinned under the
+     * video and moving it would fight the dock layout. Disabling here stops
+     * both the interception and the drag itself, leaving taps untouched.
+     */
+    public void setDragEnabled(boolean enabled) {
+        this.dragEnabled = enabled;
+        if (!enabled) {
+            dragging = false;
+        }
+    }
 
     public DraggableLayout(Context context) {
         super(context);
@@ -63,6 +76,9 @@ public class DraggableLayout extends LinearLayout {
 
     @Override
     public boolean onInterceptTouchEvent(MotionEvent ev) {
+        if (!dragEnabled) {
+            return false;
+        }
         switch (ev.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
                 downRawX = ev.getRawX();

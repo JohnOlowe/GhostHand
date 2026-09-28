@@ -93,6 +93,24 @@
     <string name="guest_stat_ping">latency</string>
     <string name="guest_waiting_video">Waiting for the video stream…</string>
     <string name="guest_bad_ip">That does not look like an IP address</string>
+    <!-- three-state control bar -->
+    <string name="guest_nav_vol_up">Vol+</string>
+    <string name="guest_nav_vol_down">Vol-</string>
+    <string name="guest_nav_media">&#9193;</string>
+    <string name="guest_controls_expand">&#9650;</string>
+    <string name="guest_controls_collapse">&#9660;</string>
+    <string name="guest_controls_close">&#215;</string>
+    <string name="guest_settings">Settings</string>
+    <string name="guest_fullscreen">Full screen</string>
+    <string name="guest_windowed">Windowed</string>
+    <string name="guest_settings_title">Control settings</string>
+    <string name="guest_settings_one_line">One-line bar</string>
+    <string name="guest_settings_expanded">Expanded panel</string>
+    <string name="guest_settings_float">Float over the video</string>
+    <string name="guest_settings_push">Dock below the video</string>
+    <string name="guest_settings_buttons_one_line">Buttons in the one-line bar</string>
+    <string name="guest_settings_buttons_expanded">Buttons in the expanded panel</string>
+    <string name="guest_settings_done">Done</string>
 
     <!-- =========================== accessibility ========================= -->
     <!--

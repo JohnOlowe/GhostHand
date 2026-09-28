@@ -114,6 +114,29 @@ public class HostActivity extends AppCompatActivity {
     private final TextComposer composer = new TextComposer();
     private final Shizuku.OnRequestPermissionResultListener SHIZUKU_PERMISSION_LISTENER =
             (requestCode, grantResult) -> runOnUiThread(this::refreshShizukuStatus);
+    // Starting (or killing) Shizuku while GhostHand is open pushes the binder
+    // into this process - Shizuku's own doc says the received listener can
+    // fire more than once, "for example, user restarts Shizuku when app is
+    // running". Without these the row stayed stale until the next resume,
+    // which is exactly what the user hit. Both fire on the main thread.
+    private final Shizuku.OnBinderReceivedListener SHIZUKU_BINDER_RECEIVED =
+            () -> refreshShizukuStatus();
+    private final Shizuku.OnBinderDeadListener SHIZUKU_BINDER_DEAD =
+            () -> refreshShizukuStatus();
+    // Belt and braces next to the listeners: a slow poll while the screen is
+    // up catches the paths neither event covers (permission toggled inside
+    // Shizuku's own UI, split-screen, a permission granted by another app).
+    private final android.os.Handler shizukuPollHandler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable shizukuPollTick = new Runnable() {
+        @Override
+        public void run() {
+            refreshShizukuStatus();
+            shizukuPollHandler.postDelayed(this, 1000L);
+        }
+    };
+    /** Skips redundant redraws from the 1 Hz poll (text only depends on this). */
+    private String lastShizukuUiKey;
     private View dotTouch;
     private TextView txtTouchStatus;
     private MaterialButton btnTouchSettings;
@@ -232,12 +255,20 @@ public class HostActivity extends AppCompatActivity {
         refreshShizukuStatus();
         // A Shizuku grant answer arrives whenever its dialog closes; re-read it.
         Shizuku.addRequestPermissionResultListener(SHIZUKU_PERMISSION_LISTENER);
+        // Server started/stopped while we are on screen: re-read immediately.
+        Shizuku.addBinderReceivedListener(SHIZUKU_BINDER_RECEIVED);
+        Shizuku.addBinderDeadListener(SHIZUKU_BINDER_DEAD);
+        shizukuPollHandler.removeCallbacks(shizukuPollTick);
+        shizukuPollHandler.post(shizukuPollTick);
     }
 
     @Override
     protected void onPause() {
         super.onPause();
         Shizuku.removeRequestPermissionResultListener(SHIZUKU_PERMISSION_LISTENER);
+        Shizuku.removeBinderReceivedListener(SHIZUKU_BINDER_RECEIVED);
+        Shizuku.removeBinderDeadListener(SHIZUKU_BINDER_DEAD);
+        shizukuPollHandler.removeCallbacks(shizukuPollTick);
     }
 
     @Override
@@ -400,13 +431,20 @@ public class HostActivity extends AppCompatActivity {
         if (txt == null || btn == null) {
             return;
         }
-        if (!ElevatedShell.isInstalled(this)) {
+        boolean installed = ElevatedShell.isInstalled(this);
+        ElevatedShell.State state = installed ? ElevatedShell.probe() : null;
+        // The 1 Hz poll would otherwise rewrite identical text every second.
+        String key = installed + ":" + state;
+        if (key.equals(lastShizukuUiKey)) {
+            return;
+        }
+        lastShizukuUiKey = key;
+        if (!installed) {
             txt.setText(R.string.host_shizuku_missing);
             btn.setText(R.string.host_shizuku_get);
             btn.setVisibility(View.VISIBLE);
             return;
         }
-        ElevatedShell.State state = ElevatedShell.probe();
         if (state == ElevatedShell.State.GRANTED) {
             txt.setText(R.string.host_shizuku_granted);
             btn.setVisibility(View.GONE);
@@ -423,6 +461,7 @@ public class HostActivity extends AppCompatActivity {
 
     private void onShizukuAction() {
         if (!ElevatedShell.isInstalled(this)) {
+            appendLog("opening the Shizuku download page");
             try {
                 startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW,
                         android.net.Uri.parse(SHIZUKU_RELEASES)));
@@ -433,13 +472,18 @@ public class HostActivity extends AppCompatActivity {
         }
         ElevatedShell.State state = ElevatedShell.probe();
         if (state == ElevatedShell.State.DENIED) {
-            ElevatedShell.requestPermission();
+            // Say something either way: a silently swallowed request looks
+            // exactly like "the button is broken".
+            appendLog(ElevatedShell.requestPermission()
+                    ? "Shizuku permission requested - approve the dialog in Shizuku"
+                    : "could not reach Shizuku to ask - is its server running?");
             return;
         }
         if (state == ElevatedShell.State.UNAVAILABLE) {
             android.content.Intent launch = getPackageManager()
                     .getLaunchIntentForPackage("moe.shizuku.privileged.api");
             if (launch != null) {
+                appendLog("opening Shizuku - start its server, the row updates by itself");
                 startActivity(launch);
             } else {
                 appendLog("Shizuku is installed but cannot be opened - start it manually");

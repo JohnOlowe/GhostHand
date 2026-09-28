@@ -127,6 +127,7 @@ public class GhostProtocolTest {
                 GhostProtocol.TYPE_VIDEO, GhostProtocol.TYPE_GEOMETRY, GhostProtocol.TYPE_STATS,
                 GhostProtocol.TYPE_BYE, GhostProtocol.TYPE_GLOBAL_ACTION,
                 GhostProtocol.TYPE_CLIPBOARD_GET, GhostProtocol.TYPE_CLIPBOARD_SET,
+                GhostProtocol.TYPE_HOST_TEXT,
         };
         for (int i = 0; i < types.length; i++) {
             for (int j = i + 1; j < types.length; j++) {
@@ -144,6 +145,7 @@ public class GhostProtocolTest {
                 GhostProtocol.TYPE_VIDEO, GhostProtocol.TYPE_GEOMETRY, GhostProtocol.TYPE_STATS,
                 GhostProtocol.TYPE_BYE, GhostProtocol.TYPE_GLOBAL_ACTION,
                 GhostProtocol.TYPE_CLIPBOARD_GET, GhostProtocol.TYPE_CLIPBOARD_SET,
+                GhostProtocol.TYPE_HOST_TEXT,
         };
         for (byte type : types) {
             String name = GhostProtocol.typeName(type);
@@ -173,6 +175,16 @@ public class GhostProtocolTest {
 
         assertEquals(12, GhostProtocol.TYPE_CLIPBOARD_GET);
         assertEquals(13, GhostProtocol.TYPE_CLIPBOARD_SET);
+        assertEquals(14, GhostProtocol.TYPE_HOST_TEXT);
+
+        // The media commands live at 100+ next to GLOBAL_ROTATE, also outside
+        // the accessibility range, because the host never forwards them to
+        // performGlobalAction - it handles them itself (AudioManager, shell).
+        assertEquals(101, GhostProtocol.GLOBAL_VOLUME_UP);
+        assertEquals(102, GhostProtocol.GLOBAL_VOLUME_DOWN);
+        assertEquals(103, GhostProtocol.GLOBAL_MEDIA_TOGGLE);
+        assertTrue(GhostProtocol.GLOBAL_VOLUME_UP > 5);
+        assertTrue(GhostProtocol.GLOBAL_MEDIA_TOGGLE != GhostProtocol.GLOBAL_ROTATE);
     }
 
     // ------------------------------------------------------------------
