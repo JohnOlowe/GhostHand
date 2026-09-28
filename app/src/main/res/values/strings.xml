@@ -110,7 +110,14 @@
     <string name="host_touch_enable">Enable in Settings</string>
     <string name="host_touch_open_settings">Open Accessibility settings</string>
     <string name="host_touch_note">Android only lets an accessibility service inject touches. Enable GhostHand touch control once and it stays on; you can switch it off in the same place.</string>
-    <string name="host_touch_hint">Tap and drag on the guest to control this phone. Drags land when the finger lifts.</string>
+    <string name="host_touch_hint">Tap and drag on the guest to control this phone. Drags land when the finger lifts — unless Shizuku below is granted, which streams them live.</string>
+    <string name="host_shizuku_missing">Shizuku (optional): not installed — grant it and touches stream live while you scroll, and the guest can rotate the whole phone.</string>
+    <string name="host_shizuku_stopped">Shizuku: installed but not running — open it and tap Start, then come back here.</string>
+    <string name="host_shizuku_denied">Shizuku: running, but GhostHand has no permission yet — tap Grant.</string>
+    <string name="host_shizuku_granted">Shizuku: granted — touches stream live (no lift delay) and rotation turns the whole phone.</string>
+    <string name="host_shizuku_get">Get Shizuku</string>
+    <string name="host_shizuku_open">Open Shizuku</string>
+    <string name="host_shizuku_grant">Grant permission</string>
     <string name="host_touch_too_old">This phone runs Android %1$s. Gesture injection arrived in Android 7.0, so this phone can mirror but cannot be controlled. The guest side works on any host.</string>
 
     <!-- ============================ notification ========================== -->

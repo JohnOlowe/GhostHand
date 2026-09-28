@@ -301,6 +301,26 @@
                         android:layout_height="wrap_content"
                         android:text="@string/host_touch_note"
                         android:textSize="11sp" />
+
+                    <!-- Optional elevation, stated plainly: what it is, whether it
+                         is there, and the one button that moves it forward. -->
+                    <TextView
+                        android:id="@+id/txtShizuku"
+                        style="@style/Text.Subtitle"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:text="@string/host_shizuku_missing"
+                        android:textSize="11sp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnShizuku"
+                        style="@style/Widget.Material3.Button.TextButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/host_shizuku_get"
+                        android:textSize="12sp" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 

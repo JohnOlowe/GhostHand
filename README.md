@@ -33,7 +33,7 @@ Package `damjay.control.ghosthand` · **minSdk 19 (Android 4.4)** · targetSdk 3
 ```bash
 git clone https://github.com/JohnOlowe/GhostHand.git
 cd GhostHand
-bash build.sh                 # setup + AndroidX + 98 unit tests + signed APK (~2.5 min cold)
+bash build.sh                 # setup + AndroidX + 102 unit tests + signed APK (~2.5 min cold)
 ```
 
 `build.sh` installs the toolchain into `toolchain/vendor` (JRE, Eclipse compiler, aapt2,
@@ -539,7 +539,11 @@ it on screen, and taps on it are consumed so they never become touches on the ho
   auto-rotate/lock settings are put back when the session stops). Shizuku needs
   Android 7+ and adb (USB, or Android 11+ wireless debugging) to start - a KitKat
   phone can do neither - so it is never a requirement: every path falls back to the
-  window flip. The
+  window flip. A status row in the host's touch-control card states all of this in
+  plain words (not installed / not running / tap Grant / granted) with one button
+  that always does the next useful thing.
+
+  The same grant also unlocks **live touch** (next section). The
   encoder then restarts at the new size (section 3 above), `GEOMETRY` flies out, and the
   guest's panel turns with the host - mid-stream rotation, exactly like the host rotating on
   its own. If the host activity happens to be stopped, the broadcast is missed but the
@@ -838,6 +842,31 @@ Two manifest attributes carry the whole feature and neither is optional:
 and `android.permission.BIND_ACCESSIBILITY_SERVICE` (the security boundary - it means only
 the system may bind, which is why `exported="true"` is not a hole).
 
+### Streaming with Shizuku: scrolling that follows the finger
+
+`dispatchGesture` cannot stream - a `StrokeDescription` is a *complete* path, and
+there is no "extend the running gesture" call - so the no-grant path necessarily
+replays a drag when the finger lifts (documented at the top of `TouchInjector`).
+The shell user, however, holds `android.permission.INJECT_EVENTS`: with Shizuku
+granted, `ShellTouch` parcels each guest event into a `MotionEvent` and calls
+`IInputManager.injectInputEvent` as it arrives, through the Shizuku binder, on the
+guest's own reader thread (ordered, sub-millisecond per event).
+
+Two version-sensitive details, both pinned by tests or verified:
+
+* The parcel layout matches the platform's generated proxy byte-for-byte
+  (`writeInt(1)` + `writeToParcel(event)`, mode `0` = async, reply = `readException`
+  + int) - taken from a decompiled AOSP `IInputManager$Stub$Proxy`.
+* The **transaction code is positional** in this classic AIDL and moves between
+  releases: 5 up to Android 7.1, 8 through 12L, 9 on 13, 12 on 14, 11 on 15/16.
+  `InputCodes` holds that table (each value counted from the version's LineageOS
+  tag) and answers -1 for anything uncounted - and -1 means *do not guess*: the
+  caller falls back to `dispatchGesture` for good. Any refusal, unknown code or
+  dead binder sets the same sticky fallback, so the worst case is the behaviour
+  we already shipped, never a crash. Guest event timestamps are remapped onto the
+  host's clock (monotonically) so VelocityTracker still reads the flick's real
+  speed and flings land correctly.
+
 ### `TouchInjector`: the part that is pure Java, and therefore testable
 
 Everything above needs a phone. The *decision* of what gesture to send does not, so it lives
@@ -926,7 +955,7 @@ tested on a plain JVM - no device, no emulator:
 bash toolchain/test.sh app --source 8
 # JUnit version 4.13.2
 # ...............................................................................
-# OK (98 tests)
+# OK (102 tests)
 ```
 
 What is covered:
@@ -954,6 +983,10 @@ What is covered:
 * `ApiLevelsTest` (6 tests) - the version policy at every boundary: 9 is unsupported, 19
   and 20 are guest-only, 21-23 mirror without being controllable, 24 is the first that does
   everything, 24 through 35 all can.
+* `InputCodesTest` (4 tests) - the per-version binder transaction codes for
+  `IInputManager.injectInputEvent`, pinned value by value (a wrong number would
+  aim our parcel at a different input-service method) plus "unknown versions
+  answer -1 instead of guessing".
 * `FrameGateTest` (5 tests) - the freeze-vs-corruption switch on the host: after a drop
   only the next key frame gets through, control frames always pass, repeated drops stay
   closed, and a dropped key frame cannot "open" the gate by being dropped.
@@ -990,7 +1023,8 @@ phones.
 | The splash shows glass and ripples but no hand | the hand bitmap was recycled while the animation was still on screen (paused and released are different things - see `SplashView.pause()` / `release()`). Only reproducible by leaving and returning to the splash mid-animation. |
 | `INSTALL_FAILED_OLDER_SDK` on Android 4.4 | you are installing the **debug** APK, which declares minSdk 21 (six dex files, and Dalvik loads one). Use the release APK. |
 | `NoClassDefFoundError` right after installing | usually the multi-dex trap: a `minSdk < 21` APK with a `classes2.dex` is broken on Dalvik. `verify_apk.py` fails the build for exactly this. |
-| Touch does nothing, host is Android 5.0-6.x | injection needs Android 7.0. The host dashboard says so instead of offering the switch. |
+| Touch does nothing, host is Android 5.0-6.x | `dispatchGesture` needs Android 7.0. The host dashboard says so instead of offering the switch - unless Shizuku is granted, whose live path injects input events directly and works from Android 5.0 up. |
+| Scrolling only reacts after I lift my finger | the no-grant path must: `dispatchGesture` takes a complete stroke, not a stream. Grant Shizuku (touch-control card) and touches stream live while you scroll. |
 | The Back/Home/Recents/Shade buttons do nothing | the host has not granted the accessibility service - the same "touch control" switch, shown in the host log for every ignored press. |
 | The Rotate button does nothing | GhostHand must be the window in front on the host (the command arrives with the stream, so it normally is), and if the activity was stopped the request only shows up in the host log. Rotation lock is overridden only for GhostHand's own window - the in-app mirror switch keeps auto-rotation unlocked for the session. |
 | "Clipboard unavailable (Android 10+ blocks background reads)" | the host answered a pull while its window was in the background - that is the OS policy, and GhostHand fails honestly instead of overwriting your copy. Tap "From host"/"From guest" while the other phone has GhostHand open, or use push ("To host"/"To guest"), which always works. |

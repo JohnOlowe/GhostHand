@@ -126,6 +126,9 @@ public class ScreenCaptureService extends Service
     private static final int NOTIFICATION_ID = 4711;
 
     private final Handler main = new Handler(Looper.getMainLooper());
+    /** Live-touch probe cache (see canLiveTouch). */
+    private volatile long lastLiveProbeAt;
+    private volatile boolean liveTouchGranted;
 
     private MediaProjection projection;
     private MediaProjection.Callback projectionCallback;
@@ -757,10 +760,38 @@ public class ScreenCaptureService extends Service
      * Guest touch -> host gesture. Runs on the reader thread; the injector's decision
      * logic is thread-safe by construction (one instance, only this method touches it)
      * and only the dispatch itself hops to the main thread.
+     *
+     * <p>Two paths. With Shizuku granted, {@link ShellTouch} injects every event
+     * as it arrives - a scroll follows the finger. Otherwise the classic path:
+     * buffer the drag, dispatchGesture at ACTION_UP. The planner is fed on BOTH
+     * paths, so a live failure mid-gesture still falls back to a planned stroke.
      */
     @Override
     public void onGuestTouch(String clientName, int action, int xNormalized,
                              int yNormalized, long timeMs) {
+        if (canLiveTouch()) {
+            int[] size = liveDisplaySize();
+            int x = TouchInjector.toPixels(xNormalized, size[0]);
+            int y = TouchInjector.toPixels(yNormalized, size[1]);
+            TouchInjector.Gesture planned = touchInjector.onTouch(action, x, y, timeMs);
+            boolean ok = ShellTouch.onTouch(action, x, y, timeMs);
+            if (!ok && planned != null
+                    && (action == TouchInjector.ACTION_UP
+                        || action == TouchInjector.ACTION_CANCEL)) {
+                // Live injection died partway through this gesture: the planned
+                // stroke is the safety net, exactly as if Shizuku were off.
+                final TouchInjector.Gesture ready = planned;
+                main.post(() -> {
+                    InjectionAccessibilityService svc = InjectionAccessibilityService.instance();
+                    if (svc != null && svc.inject(ready)) {
+                        log("injected " + ready + " from " + clientName
+                                + " (live touch fell back)");
+                    }
+                });
+            }
+            return;
+        }
+
         if (!ApiLevels.canInject(Build.VERSION.SDK_INT)) {
             // API 21-23: the service can be enabled in Settings but dispatchGesture()
             // does not exist, so never even look for it. (This is also why the old
@@ -837,6 +868,38 @@ public class ScreenCaptureService extends Service
                         + " refused by the system");
             }
         });
+    }
+
+    /**
+     * Whether the Shizuku path may take this event. Probed at most every 2 s so a
+     * burst of taps costs one binder ping, not one per finger movement; unknown
+     * Android versions (InputCodes = -1) and a broken ShellTouch never qualify.
+     */
+    private boolean canLiveTouch() {
+        long now = SystemClock.uptimeMillis();
+        if (now - lastLiveProbeAt > 2_000L) {
+            lastLiveProbeAt = now;
+            boolean granted = ElevatedShell.probe() == ElevatedShell.State.GRANTED
+                    && InputCodes.injectInputEventCode(Build.VERSION.SDK_INT) > 0;
+            if (granted && !liveTouchGranted) {
+                log("live touch ON - touches stream as they move (shizuku)");
+            }
+            liveTouchGranted = granted;
+        }
+        return liveTouchGranted && !ShellTouch.isBroken();
+    }
+
+    /**
+     * Real display size for the live path - works without the accessibility
+     * service (and on hosts too old for dispatchGesture at all), unlike
+     * {@code injector.displaySize()}.
+     */
+    private int[] liveDisplaySize() {
+        android.view.WindowManager wm =
+                (android.view.WindowManager) getSystemService(WINDOW_SERVICE);
+        android.graphics.Point p = new android.graphics.Point();
+        wm.getDefaultDisplay().getRealSize(p);
+        return new int[] { p.x, p.y };
     }
 
     private static String actionName(int action) {

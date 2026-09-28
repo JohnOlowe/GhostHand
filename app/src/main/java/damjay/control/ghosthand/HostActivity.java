@@ -45,6 +45,8 @@ import damjay.control.ghosthand.host.HostController;
 import damjay.control.ghosthand.host.InjectionAccessibilityService;
 import damjay.control.ghosthand.host.ScreenCaptureService;
 import damjay.control.ghosthand.util.TextComposer;
+
+import rikka.shizuku.Shizuku;
 import damjay.control.ghosthand.net.GhostProtocol;
 
 /**
@@ -110,6 +112,8 @@ public class HostActivity extends AppCompatActivity {
     private boolean awaitingReconsent;
     private boolean desiredMirror;
     private final TextComposer composer = new TextComposer();
+    private final Shizuku.OnRequestPermissionResultListener SHIZUKU_PERMISSION_LISTENER =
+            (requestCode, grantResult) -> runOnUiThread(this::refreshShizukuStatus);
     private View dotTouch;
     private TextView txtTouchStatus;
     private MaterialButton btnTouchSettings;
@@ -225,6 +229,15 @@ public class HostActivity extends AppCompatActivity {
         // The user may be returning from Accessibility settings, where the grant is
         // made. There is no callback for that, so re-read it whenever we come back.
         refreshTouchStatus();
+        refreshShizukuStatus();
+        // A Shizuku grant answer arrives whenever its dialog closes; re-read it.
+        Shizuku.addRequestPermissionResultListener(SHIZUKU_PERMISSION_LISTENER);
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        Shizuku.removeRequestPermissionResultListener(SHIZUKU_PERMISSION_LISTENER);
     }
 
     @Override
@@ -301,6 +314,8 @@ public class HostActivity extends AppCompatActivity {
                 ScreenCaptureService.ACTION_CLIPBOARD_PUSH));
         findViewById(R.id.btnClipFrom).setOnClickListener(v -> sendClipboardCommand(
                 ScreenCaptureService.ACTION_CLIPBOARD_GET));
+        findViewById(R.id.btnShizuku).setOnClickListener(v -> onShizukuAction());
+
         findViewById(R.id.btnCompose).setOnClickListener(v -> {
             if (!ScreenCaptureService.isStreaming()) {
                 appendLog("start sharing first - the clipboard needs a live session");
@@ -369,6 +384,69 @@ public class HostActivity extends AppCompatActivity {
         appendLog("guest asked for rotation -> switched orientation");
     }
 
+    /** URL the "Get"/"How to start" states open. */
+    private static final String SHIZUKU_RELEASES =
+            "https://github.com/RikkaApps/Shizuku/releases";
+
+    /**
+     * The plain-language Shizuku status row. Four states, four sentences, one
+     * button that always does the next useful thing: install (browser), start
+     * (Shizuku's own launcher), grant (Shizuku's dialog) - or nothing at all
+     * once granted. Refreshed on resume and whenever a permission answer lands.
+     */
+    private void refreshShizukuStatus() {
+        TextView txt = findViewById(R.id.txtShizuku);
+        android.widget.Button btn = findViewById(R.id.btnShizuku);
+        if (txt == null || btn == null) {
+            return;
+        }
+        if (!ElevatedShell.isInstalled(this)) {
+            txt.setText(R.string.host_shizuku_missing);
+            btn.setText(R.string.host_shizuku_get);
+            btn.setVisibility(View.VISIBLE);
+            return;
+        }
+        ElevatedShell.State state = ElevatedShell.probe();
+        if (state == ElevatedShell.State.GRANTED) {
+            txt.setText(R.string.host_shizuku_granted);
+            btn.setVisibility(View.GONE);
+        } else if (state == ElevatedShell.State.DENIED) {
+            txt.setText(R.string.host_shizuku_denied);
+            btn.setText(R.string.host_shizuku_grant);
+            btn.setVisibility(View.VISIBLE);
+        } else {
+            txt.setText(R.string.host_shizuku_stopped);
+            btn.setText(R.string.host_shizuku_open);
+            btn.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private void onShizukuAction() {
+        if (!ElevatedShell.isInstalled(this)) {
+            try {
+                startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse(SHIZUKU_RELEASES)));
+            } catch (RuntimeException e) {
+                appendLog("no browser available for " + SHIZUKU_RELEASES);
+            }
+            return;
+        }
+        ElevatedShell.State state = ElevatedShell.probe();
+        if (state == ElevatedShell.State.DENIED) {
+            ElevatedShell.requestPermission();
+            return;
+        }
+        if (state == ElevatedShell.State.UNAVAILABLE) {
+            android.content.Intent launch = getPackageManager()
+                    .getLaunchIntentForPackage("moe.shizuku.privileged.api");
+            if (launch != null) {
+                startActivity(launch);
+            } else {
+                appendLog("Shizuku is installed but cannot be opened - start it manually");
+            }
+        }
+    }
+
     private void onMirrorToggled(android.widget.CompoundButton button, boolean checked) {
         button.setText(checked ? R.string.host_mode_mirror : R.string.host_mode_public);
         if (ScreenCaptureService.isStreaming()) {
@@ -420,10 +498,11 @@ public class HostActivity extends AppCompatActivity {
      *  mode-change consent was in flight (Android 14 re-consent flow). */
     private void startCapture(int resultCode, Intent data, boolean mirror) {
         // Optional elevation, reported honestly once per session start.
+        refreshShizukuStatus();
         switch (ElevatedShell.probe()) {
             case GRANTED:
-                appendLog("shizuku: granted - guest rotation turns the whole phone,"
-                        + " even with other apps in front");
+                appendLog("shizuku: granted - touches stream live and guest rotation"
+                        + " turns the whole phone, even with other apps in front");
                 break;
             case DENIED:
                 appendLog("shizuku: running, not granted - guest rotation stays"

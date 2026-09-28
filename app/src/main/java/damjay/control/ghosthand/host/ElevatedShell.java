@@ -52,6 +52,16 @@ public final class ElevatedShell {
     private ElevatedShell() {
     }
 
+    /** True when the Shizuku app itself is installed (needs the <queries> tag). */
+    public static boolean isInstalled(android.content.Context context) {
+        try {
+            context.getPackageManager().getPackageInfo("moe.shizuku.privileged.api", 0);
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     /** Cheap, main-thread-safe probe. Never throws. */
     public static State probe() {
         try {
