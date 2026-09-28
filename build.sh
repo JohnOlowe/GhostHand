@@ -61,8 +61,8 @@ SOURCE=8            # 8 = compile against the real Android API surface (see RECI
 # a one-shot consent), vc5 showed grey/green on 4.4 (csd without Annex-B start
 # codes). Both configurations always share the code, so they stay installable over
 # each other and over anything older.
-VERSION_CODE=11
-VERSION_NAME=0.2.10-androidx
+VERSION_CODE=12
+VERSION_NAME=0.2.11-androidx
 MODE="release"      # release | debug | both
 PUBLISH=0
 RUN_TESTS=1

@@ -18,10 +18,8 @@ import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.CheckBox;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -813,6 +811,13 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
                 : ViewGroup.LayoutParams.WRAP_CONTENT;
         lp.gravity = docked ? Gravity.BOTTOM : (Gravity.BOTTOM | Gravity.END);
         controlsBar.setBackgroundResource(docked ? R.drawable.bg_dock : R.drawable.bg_pill);
+        // The floating bar carries a 10dp margin from the XML; a DOCKED bar
+        // must not - that margin was the visible gap between the bar and the
+        // true bottom of the screen, sitting inside the reserved strip. Float
+        // mode puts the 10dp back (and keeps it out of the dock's height math,
+        // which uses lp.bottomMargin below).
+        int edge = docked ? 0 : dp(10);
+        lp.setMargins(edge, edge, edge, edge);
         if (docked) {
             controlsBar.setTranslationX(0f);
             controlsBar.setTranslationY(0f);
@@ -908,6 +913,9 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
         done.setText(R.string.guest_settings_done);
         done.setTextSize(14f);
         done.setPadding(0, dp(14), 0, dp(6));
+        // item_control_button is pill-coloured for the control bar; inside the
+        // light settings panel it needs the theme ink instead.
+        done.setTextColor(getResources().getColor(R.color.text_primary));
         done.setOnClickListener(v -> panelSettings.setVisibility(View.GONE));
         settingsContent.addView(done);
     }
@@ -917,23 +925,48 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
         h.setText(text);
         h.setTextSize(14f);
         h.setTypeface(null, android.graphics.Typeface.BOLD);
-        h.setTextColor(0xFFFFFFFF);
+        // The panel sits on @color/surface (white in the light scheme), so the
+        // theme's own text colour is correct in BOTH modes - forced white was
+        // what made this unreadable on KitKat, which is always light.
+        h.setTextColor(getResources().getColor(R.color.text_primary));
         h.setPadding(0, dp(first == 0 ? 0 : 18), 0, dp(6));
         return h;
+    }
+
+    /**
+     * A checkbox/radio that reads on the panel's themed surface: AppCompat
+     * widgets because they can tint the little box/circle on every API level
+     * (the framework gained setButtonTintList only in 21, this app floors at 19).
+     */
+    private static void tintChoice(android.widget.TextView choice, int color) {
+        choice.setTextColor(color);
+        if (choice instanceof androidx.appcompat.widget.AppCompatCheckBox) {
+            ((androidx.appcompat.widget.AppCompatCheckBox) choice)
+                    .setButtonTintList(android.content.res.ColorStateList.valueOf(color));
+        }
+        if (choice instanceof androidx.appcompat.widget.AppCompatRadioButton) {
+            ((androidx.appcompat.widget.AppCompatRadioButton) choice)
+                    .setButtonTintList(android.content.res.ColorStateList.valueOf(color));
+        }
     }
 
     private RadioGroup dockGroup(final boolean forOneLine) {
         RadioGroup g = new RadioGroup(this);
         g.setOrientation(RadioGroup.HORIZONTAL);
         ControlsConfig.Dock current = forOneLine ? dockOneLine : dockExpanded;
-        RadioButton floatBtn = new RadioButton(this);
+        final int ink = getResources().getColor(R.color.text_primary);
+        androidx.appcompat.widget.AppCompatRadioButton floatBtn =
+                new androidx.appcompat.widget.AppCompatRadioButton(this);
         floatBtn.setId(View.generateViewId());
         floatBtn.setText(R.string.guest_settings_float);
         floatBtn.setChecked(current == ControlsConfig.Dock.FLOAT);
-        RadioButton pushBtn = new RadioButton(this);
+        androidx.appcompat.widget.AppCompatRadioButton pushBtn =
+                new androidx.appcompat.widget.AppCompatRadioButton(this);
         pushBtn.setId(View.generateViewId());
         pushBtn.setText(R.string.guest_settings_push);
         pushBtn.setChecked(current == ControlsConfig.Dock.PUSH);
+        tintChoice(floatBtn, ink);
+        tintChoice(pushBtn, ink);
         g.addView(floatBtn);
         g.addView(pushBtn);
         g.setOnCheckedChangeListener((group, checkedId) -> {
@@ -954,11 +987,14 @@ public class GuestActivity extends AppCompatActivity implements GuestController.
     }
 
     private void addCheckboxes(LinearLayout c, final Set<String> selection) {
+        final int ink = getResources().getColor(R.color.text_primary);
         for (final String id : ControlsConfig.BUTTON_IDS) {
-            CheckBox cb = new CheckBox(this);
+            androidx.appcompat.widget.AppCompatCheckBox cb =
+                    new androidx.appcompat.widget.AppCompatCheckBox(this);
             Integer label = buttonLabels.get(id);
             cb.setText(label == null ? id : getString(label));
             cb.setChecked(selection.contains(id));
+            tintChoice(cb, ink);
             cb.setOnCheckedChangeListener((button, checked) -> {
                 if (checked) {
                     selection.add(id);

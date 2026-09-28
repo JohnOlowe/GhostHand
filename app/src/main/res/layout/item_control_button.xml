@@ -12,4 +12,5 @@
     android:minHeight="0dp"
     android:paddingLeft="8dp"
     android:paddingRight="8dp"
+    android:textColor="@color/pill_text"
     android:textSize="12sp" />

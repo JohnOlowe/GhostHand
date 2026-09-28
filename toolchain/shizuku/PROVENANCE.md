@@ -20,3 +20,23 @@ values above. The upstream sources are `github.com/RikkaApps/Shizuku-API`.
 
 Rebuild: extract `classes.jar` from each AAR and merge the `.class` entries
 (no duplicates), keeping the `proguard.txt` of each AAR empty as shipped.
+
+## The manifest payload the jar cannot carry
+
+An AAR is classes **plus a manifest**, and Gradle merges that manifest into
+every consuming app. `classes.jar` alone silently drops these entries - which
+is exactly how vc9-vc11 shipped a Shizuku integration that could never work
+(the status row stuck on "not running", restarting Shizuku changing nothing).
+Both live in `provider-13.1.5.aar`'s `AndroidManifest.xml` upstream and are
+now declared by hand in `app/src/main/AndroidManifest.xml`, pinned by
+`ShizukuWiringTest`:
+
+| entry | why the app is dead without it |
+|---|---|
+| `<uses-permission android:name="moe.shizuku.manager.permission.API_V23"/>` | the server's `BinderSender` pushes the binder **only** to packages whose `requestedPermissions` contains this name; that push (into `ShizukuProvider.call("sendBinder")`) is the single way a client ever receives a binder |
+| `<meta-data android:name="moe.shizuku.client.V3_SUPPORT" android:value="true"/>` | the server's `getApplications()` and the manager's `AuthorizationManager` filter on it - without it the app cannot appear in (or be granted from) Shizuku's own UI |
+
+The `ShizukuProvider` declaration itself (authority `<applicationId>.shizuku`,
+`exported=true`, `multiprocess=false`, guarded by `INTERACT_ACROSS_USERS_FULL`)
+is written in the app manifest for the same reason: aapt2 does not substitute
+`${applicationId}`, and there is no manifest merger here at all.

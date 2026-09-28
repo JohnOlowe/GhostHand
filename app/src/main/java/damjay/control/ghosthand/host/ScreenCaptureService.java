@@ -978,12 +978,16 @@ public class ScreenCaptureService extends Service
     private void rotateSystemOrWindow() {
         ElevatedShell.State state = ElevatedShell.probe();
         if (state == ElevatedShell.State.DENIED) {
-            askElevatedPermissionOnce();
+            askElevatedPermissionForRotation();
             broadcastState(null, true);
+            replyHostText("approve Shizuku on the host - until then this only "
+                    + "rotates GhostHand's own window");
             return;
         }
         if (state != ElevatedShell.State.GRANTED) {
             broadcastState(null, true);
+            replyHostText("rotation needs Shizuku on the host (not running) - "
+                    + "for now this only rotates GhostHand's own window");
             return;
         }
         // Flip portrait<->landscape at the system level and remember what was
@@ -1005,23 +1009,40 @@ public class ScreenCaptureService extends Service
                         broadcastUnspecify();
                         log("rotated system-wide (shizuku)"
                                 + (out.isEmpty() ? "" : ", was: " + out));
+                        replyHostText("rotated system-wide");
                     } else {
                         log("shell rotation failed - falling back to window rotation");
                         broadcastState(null, true);
+                        replyHostText("shell rotation failed - rotated GhostHand's "
+                                + "window instead (visible only while GhostHand is in front)");
                     }
                 });
     }
 
     /** One Shizuku permission dialog per install, at the moment it helps. */
-    private void askElevatedPermissionOnce() {
+    /**
+     * Asks for the Shizuku grant when the guest presses Rotate and we do not
+     * have it yet. Re-asks at most every 30 seconds instead of exactly once
+     * ever: the old "once" flag was a landmine - the first ask could happen
+     * while the binder was still missing (requestPermission was a silent
+     * no-op then), which permanently disabled the dialog for the rest of
+     * installation, and Rotate looked broken forever after.
+     */
+    private void askElevatedPermissionForRotation() {
         android.content.SharedPreferences prefs =
                 getSharedPreferences("ghosthand_rot", MODE_PRIVATE);
-        if (!prefs.getBoolean("asked", false)) {
-            prefs.edit().putBoolean("asked", true).apply();
-            ElevatedShell.requestPermission();
-            log("shizuku is running - grant it to rotate while other apps are in front");
+        long now = SystemClock.uptimeMillis();
+        long last = prefs.getLong("asked_at", 0L);
+        if (now - last < 30_000L) {
+            log("shizuku permission already requested - approve the dialog");
+            return;
+        }
+        prefs.edit().putLong("asked_at", now).apply();
+        if (ElevatedShell.requestPermission()) {
+            log("shizuku permission requested - approve the dialog to rotate "
+                    + "while other apps are in front");
         } else {
-            log("shizuku permission not granted - rotating GhostHand's own window");
+            log("could not ask shizuku for permission (server not reachable)");
         }
     }
 

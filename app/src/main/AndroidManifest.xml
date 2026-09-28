@@ -39,6 +39,32 @@
         <package android:name="moe.shizuku.privileged.api" />
     </queries>
 
+    <!--
+      The client identity that the official `shizuku-provider` AAR ships in ITS
+      manifest (provider/src/main/AndroidManifest.xml upstream). Gradle would
+      merge these into every app automatically; the toolchain here vendors the
+      jar (classes only), so they have to be stated by hand - and without them
+      Shizuku is completely, silently dead:
+
+        * API_V23 is HOW THE SERVER RECOGNISES A CLIENT AT ALL. BinderSender
+          (server source) iterates installed packages and calls
+          sendBinderToUserApp ONLY for packages whose requestedPermissions
+          contains "moe.shizuku.manager.permission.API_V23"; the push that
+          arrives at ShizukuProvider.call("sendBinder") is the one and only
+          way a client ever gets the binder. No uses-permission = no binder =
+          pingBinder() false forever = the status row stuck on "not running"
+          no matter how often Shizuku is restarted. (It is the identification
+          token that matters, not the grant: the client path never checks the
+          permission's grant state.)
+        * V3_SUPPORT meta-data is what makes the app appear in Shizuku's
+          authorization lists (ShizukuService.getApplications and the
+          manager's AuthorizationManager both filter on it) - without it the
+          app cannot be managed or granted from Shizuku's own UI.
+
+      Shizuku needs Android 6+/7+, so none of this activates on KitKat hosts.
+    -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
+
     <application
         android:allowBackup="false"
         android:hardwareAccelerated="true"
@@ -159,6 +185,12 @@
             android:exported="true"
             android:multiprocess="false"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+        <!-- Part of the client identity above: the server and the manager UI
+             filter on this flag (see the long comment next to uses-permission). -->
+        <meta-data
+            android:name="moe.shizuku.client.V3_SUPPORT"
+            android:value="true" />
 
     </application>
 

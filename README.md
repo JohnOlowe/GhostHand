@@ -33,7 +33,7 @@ Package `damjay.control.ghosthand` · **minSdk 19 (Android 4.4)** · targetSdk 3
 ```bash
 git clone https://github.com/JohnOlowe/GhostHand.git
 cd GhostHand
-bash build.sh                 # setup + AndroidX + 108 unit tests + signed APK (~2.5 min cold)
+bash build.sh                 # setup + AndroidX + 111 unit tests + signed APK (~2.5 min cold)
 ```
 
 `build.sh` installs the toolchain into `toolchain/vendor` (JRE, Eclipse compiler, aapt2,
@@ -1001,7 +1001,7 @@ rules **and the version policy** can be tested on a plain JVM - no device, no em
 bash toolchain/test.sh app --source 8
 # JUnit version 4.13.2
 # ...............................................................................
-# OK (108 tests)
+# OK (111 tests)
 ```
 
 What is covered:
@@ -1039,6 +1039,13 @@ What is covered:
   settings CSV round-trips that drop unknown ids and deduplicate, first-run defaults
   where the one-line row must be a subset of the expanded panel, unique registry ids,
   and the HUD's volume percentage (rounded, clamped, and safe against a bogus max).
+* `ShizukuWiringTest` (3 tests) - parses `AndroidManifest.xml` and pins the Shizuku
+  client identity: the `API_V23` uses-permission (the server's `BinderSender` pushes
+  the binder only to packages that request it - miss it and Shizuku is silently,
+  permanently dead), the `V3_SUPPORT` meta-data (Shizuku's UI filters on it), and the
+  provider entry exactly as the official snippet writes it. Both identity lines come
+  from the provider AAR's own manifest, which a classes-only jar cannot carry - the
+  test exists because losing them did.
 * `FrameGateTest` (5 tests) - the freeze-vs-corruption switch on the host: after a drop
   only the next key frame gets through, control frames always pass, repeated drops stay
   closed, and a dropped key frame cannot "open" the gate by being dropped.
@@ -1082,7 +1089,11 @@ phones.
 | "Clipboard unavailable (Android 10+ blocks background reads)" | the host answered a pull while its window was in the background - that is the OS policy, and GhostHand fails honestly instead of overwriting your copy. Tap "From host"/"From guest" while the other phone has GhostHand open, or use push ("To host"/"To guest"), which always works. |
 | The video lags behind the action | lower the host's frame rate (capture settings: 20, or 15 on a bad link). Fewer frames per second into the same pipe = shallower queues = less end-to-end delay. |
 | Green blocks / shredded picture while scrolling fast (see `screenshots/`) | was vc8: a network drop left the guest decoding P-frames against a reference it never received. Fixed by the host-side `FrameGate` (freeze up to one key-frame interval instead of corruption). If it returns, check the host's `dropped` counter - and try the 480p preset, because a 2013 guest decoder can also struggle on high-motion 720p. |
-| The host's Shizuku row did not change after I started Shizuku | was vc10: the row only refreshed when the activity resumed, and "Grant" pressed while the row was stale did nothing. vc11 re-reads it at 1 Hz and on Shizuku's binder-received/binder-dead callbacks, and every button press logs its outcome - tap Grant and Shizuku's dialog appears (approve it in Shizuku). |
+| The host's Shizuku row stays on "not running" although Shizuku IS running | was vc9-vc11: the manifest was missing `<uses-permission android:name="moe.shizuku.manager.permission.API_V23"/>`. That name is how the Shizuku server recognises a client at all - its `BinderSender` pushes the binder only to packages that request it, and the push is the single way a client ever gets one. Gradle merges this line from the provider AAR automatically; this toolchain vendors the jar (classes only), so it had to be declared by hand - vc12 does, plus the `V3_SUPPORT` meta-data that puts the app in Shizuku's own lists, both pinned by `ShizukuWiringTest`. **Install the vc12 APK (an update is enough) and the row goes live.** |
+| The host's Shizuku row did not change after I started Shizuku | the refresh side (vc11): the row re-reads at 1 Hz and on Shizuku's binder-received/binder-dead events, every button press logs its outcome, and Grant answers "permission requested" or why it could not ask. If the row never leaves "not running", see the row above - that is the delivery, not the refresh. |
+| The guest's Settings page is unreadable (dark text on dark) | was vc11: the panel hard-coded a translucent black background while the text came from the light theme - and KitKat has no dark-mode switch at all, so it is permanently in the light scheme. vc12 gives the panel the themed surface colour (white in light mode) and pins the pill surfaces (status, control bar, HUD) to a constant light `pill_text`, because the pills are dark in BOTH schemes. |
+| The docked bar floats above the bottom of the screen | was vc11: the floating bar's 10dp layout margin survived the dock, so the reserved strip included a 10dp gap under the bar. Docking now zeroes the margins (and float mode puts them back). |
+| Rotate has never done anything | two bugs, both fixed: (1) Shizuku never worked (row above), so the system-wide path was unreachable and the fallback only flips GhostHand's OWN window - invisible while the host mirrors another app; (2) the first permission ask was gated "once ever", and asking while the binder was missing was a silent no-op that disabled the dialog for good. vc12 re-asks every 30 s and the guest now gets an honest `HOST_TEXT` answer for every outcome: "rotated system-wide", "approve Shizuku on the host", or "only rotates GhostHand's own window". |
 | Play/Pause does nothing | it needs Shizuku: injecting a media key is shell work (`INJECT_EVENTS`). The host answers the press either way - "play/pause sent" or "needs Shizuku". Volume needs nothing of the sort: it is an `AudioManager` call and always works. |
 | Volume buttons do nothing on the host | the media stream may already be at its end (the HUD shows the level the host reports). If the HUD never appears, the session is not live - check the guest log for the `HOST_TEXT` answer. |
 | Guest Rotate does nothing while another app is in front | expected without Shizuku: the window-level flip only works with GhostHand in front. On Android 7+, install Shizuku, start it (wireless debugging on Android 11+, else USB adb - KitKat cannot run Shizuku at all), and grant the dialog GhostHand shows on the first rotate: rotation then becomes system-wide. |

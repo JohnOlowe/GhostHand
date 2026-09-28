@@ -41,7 +41,7 @@
             android:paddingHorizontal="14dp"
             android:paddingVertical="8dp"
             android:text="@string/guest_status_idle"
-            android:textColor="@color/text_primary" />
+            android:textColor="@color/pill_text" />
     </FrameLayout>
 
     <!-- Status pill, top-left. -->
@@ -71,7 +71,7 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
             android:text="@string/guest_status_idle"
-            android:textColor="@color/text_primary"
+            android:textColor="@color/pill_text"
             android:textSize="12sp" />
     </LinearLayout>
 
@@ -107,7 +107,7 @@
         android:paddingHorizontal="14dp"
         android:paddingVertical="8dp"
         android:text="@string/guest_controls_expand"
-        android:textColor="@color/text_primary"
+        android:textColor="@color/pill_text"
         android:textSize="13sp"
         android:visibility="gone" />
 
@@ -124,7 +124,7 @@
         android:background="@drawable/bg_pill"
         android:paddingHorizontal="14dp"
         android:paddingVertical="8dp"
-        android:textColor="@color/text_primary"
+        android:textColor="@color/pill_text"
         android:visibility="gone" />
 
     <!-- Full-screen settings page: per-state float/dock choice and the
@@ -134,7 +134,7 @@
         android:id="@+id/panelSettings"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="#E6101418"
+        android:background="@color/surface"
         android:visibility="gone">
 
         <ScrollView

@@ -33,6 +33,14 @@
 
     <!-- text -->
     <color name="text_primary">#191C1B</color>
+    <!-- Text on the translucent PILL surfaces (status bar, control bar, HUD,
+         overlay). The pills are a fixed #CC101418 in BOTH modes, so their
+         text must be a fixed light colour too: text_primary flips with the
+         day/night theme (dark in day), which made every pill unreadable on
+         devices that never go dark - KitKat has no dark-mode switch at all,
+         so it is permanently in the light scheme. Defined in values/ only,
+         deliberately NOT overridden in values-night: same light text there. -->
+    <color name="pill_text">#F2F5F7</color>
     <color name="text_secondary">#414945</color>
 
     <!--
