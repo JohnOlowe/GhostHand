@@ -42,17 +42,22 @@ Gradle layout (`src/main/AndroidManifest.xml`, `src/main/res`, `src/main/java`).
 | `androidx_fetch.py` | blobless clone of the source repo + fetch of the selected AARs/jars |
 | `select_androidx.py` | picks the highest version of each wanted artifact, skips `-sources`/`-javadoc`/test-only |
 | `extract_aar.py` | explodes AARs (classes.jar, res/, R.txt, AndroidManifest.xml, libs/, assets/) |
-| `androidx_assemble.py` | merges the jars (including each AAR's `libs/*.jar`), compiles every library `res/`, writes `packages.txt` |
+| `androidx_assemble.py` | merges the jars (including each AAR's `libs/*.jar`), compiles every library `res/`, writes `packages.txt`; the same flags add a dependency whose source you cloned (`--extra-jar`, `--extra-res`, `--extra-package`) |
+| `androidx-known-dangling.txt` | types the vendored AndroidX names but Maven cannot supply (`kotlinx.coroutines`): excused for every project, counted out loud on every verification |
 
 ## Options
 
 ```
 build.sh DIR [--api N] [--min-api N] [--source 8|11|17|21|25] [--release]
-             [--out FILE] [--verify] [--no-androidx]
+             [--out FILE] [--verify] [--no-androidx] [--package NAME]
 check.sh DIR [--api N] [--min-api N] [--source N] [--no-dex] [--no-xml-lint]
-             [--no-androidx] [--full-dex]
-test.sh  DIR [--source N] [--filter SomeTest] [--no-androidx]
+             [--no-androidx] [--full-dex] [--package NAME]
+test.sh  DIR [--source N] [--filter SomeTest] [--no-androidx] [--package NAME]
 ```
+
+`--package` is only needed to *override* the application package: it is read from the
+manifest, or, when there is none (AGP 7+: `namespace = "..."` in
+`build.gradle[.kts]`), from the build file — see below.
 
 `minSdkVersion` comes from the project's manifest (that is what the artifact will
 claim); `--min-api` overrides it. It decides aapt2's resource versioning, D8's
@@ -106,6 +111,14 @@ slidingpanelayout, only slidingpanelayout referenced window). `lifecycle-viewmod
 stays even for an app with no ViewModels, because `ComponentActivity`'s constructor
 calls `SavedStateHandleSupport.enableSavedStateHandles()` and R8 fails without it.
 
+`ANDROIDX_DIR` is the contract: a directory holding `androidx.jar`, `packages.txt`
+and any `res/*.zip`. A caller-provided directory that is missing a piece is rejected
+immediately and by name — an incomplete one otherwise fails much later, as
+`aapt2: resource style/Theme.Material3.DayNight.NoActionBar not found`, which blames
+your app for the state of the vendor directory. (Exporting `ANDROID_JAR` to point at
+another platform does *not* work: `env.sh` re-exports it, and the tools now say so out
+loud and point at `setup.sh --api N` instead of silently ignoring the override.)
+
 A project gets AndroidX automatically when it mentions `androidx.`,
 `Theme.AppCompat`, `Theme.Material3`, `MaterialComponents` or
 `com.google.android.material` anywhere in `src/`, `res/` or the manifest — the plain
@@ -115,6 +128,86 @@ A project gets AndroidX automatically when it mentions `androidx.`,
 Not done (deliberately, and documented): library `<provider>`/`<receiver>` entries are
 not manifest-merged, resources are merged non-namespaced with `--auto-add-overlay`,
 and dependency versions are whatever the harvested cache contains.
+
+## Projects that Gradle built (no `package=` in the manifest)
+
+Since AGP 7 the application id does not live in `AndroidManifest.xml` any more: it is
+`namespace = "com.example.app"` in `build.gradle.kts`, and `aapt2 link` — which AGP
+shields you from — refuses a manifest without a `package` attribute
+(`error: <manifest> must have a 'package' attribute`). So a manifest straight out of
+a real project is not an input this toolchain can link, even though it is a perfectly
+valid manifest.
+
+All three entry points resolve the package in this order:
+
+1. `--package NAME` (explicit, wins);
+2. the manifest's `package="..."`;
+3. `namespace` / `applicationId` in `build.gradle`, `build.gradle.kts`,
+   `app/build.gradle[.kts]` or `../build.gradle[.kts]`.
+
+If it only comes from the build file, the manifest is **copied** into `build/` and the
+attribute is added to the copy; the project's own manifest is never written to. That
+distinction matters: an adapter that patches the real manifest makes the check mutate
+the project it is checking (and the next Gradle build sees the edit).
+
+`sample-agp/` is a project in exactly that shape, and the verification matrix runs it.
+
+## Dependencies Maven cannot give you
+
+Maven, Google's maven, JitPack and even `deb.debian.org` are unreachable here, so a
+library that is not already in the vendored AndroidX cache (Glide, a
+recyclerview-based widget, an image loader) cannot be resolved — but it can be
+**compiled from source**, which is enough to type-check your app against it. The
+recipe, verified end to end against a synthetic library (`com.acme.widget`):
+
+```bash
+# 1. get the source (GitHub works; pin it by tag or commit)
+git clone --depth 1 --branch <tag> https://github.com/<owner>/<lib>.git /tmp/lib
+
+# 2. generate the library's R class - AGP does this too, and a library whose code
+#    says `R.string.foo` cannot compile without it
+AAPT2=toolchain/vendor/aapt2
+"$AAPT2" compile --dir /tmp/lib/<res dir> -o /tmp/lib/res.zip
+"$AAPT2" link --static-lib --auto-add-overlay -o /tmp/lib/lib.apk \
+  --manifest /tmp/lib/AndroidManifest.xml -I toolchain/vendor/android.jar \
+  --java /tmp/lib/gen -R /tmp/lib/res.zip
+
+# 3. compile it against android.jar (source level 8 keeps API fidelity)
+mkdir -p /tmp/lib/classes
+toolchain/vendor/jre/bin/java -jar toolchain/vendor/ecj.jar \
+  -source 8 -target 8 -proc:none -bootclasspath toolchain/vendor/android.jar \
+  -d /tmp/lib/classes $(find /tmp/lib/src -name '*.java') \
+  $(find /tmp/lib/gen -name '*.java')
+
+# 4. zip it - there is no `jar` binary in the vendored JRE, use python3
+python3 -c "import zipfile,os,shutil; z=zipfile.ZipFile('/tmp/lib/lib.jar','w',zipfile.ZIP_DEFLATED); [z.write(os.path.join(r,f), os.path.relpath(os.path.join(r,f),'/tmp/lib/classes')) for r,_,fs in os.walk('/tmp/lib/classes') for f in fs]"
+
+# 5. add it to the harvest; every later build picks it up automatically
+python3 toolchain/androidx_assemble.py --stage toolchain/vendor/androidx/aar \
+  --jars toolchain/vendor/androidx/src/maven --out toolchain/vendor/androidx \
+  --aapt2 "$AAPT2" --extra-jar /tmp/lib/lib.jar --extra-res /tmp/lib/<res dir> \
+  --extra-package com.acme.widget
+```
+
+What each flag is for, and the traps (all four were hit while writing this):
+
+* `--extra-jar` merges the library's classes into `androidx.jar` (the app compiles
+  against them). The R class from step 2 is **dropped** on the way in: `aapt2 link
+  --extra-packages` generates the real one for the app, and shipping both is a
+  `Type ... is defined multiple times` failure in D8 (found exactly that way).
+* `--extra-res` compiles the library's `res/` into `res/extra.zip`, which the app
+  link picks up as `-R` — without it a layout or theme from the library is missing
+  from the APK.
+* `--extra-package` puts the package into `packages.txt`, i.e. `aapt2 link
+  --extra-packages`: without it the library's own `R.string.x` never exists.
+* a jar that contributes **zero** entries now fails the assembler instead of
+  producing a slightly smaller `androidx.jar` and a `NoClassDefFoundError` later;
+  every input's entry count is printed.
+
+For AndroidX itself there are no tags in `androidx/androidx`; pin a checkout by
+commit date instead (`gh api "repos/androidx/androidx/commits?path=<module>/src/main/java&until=YYYY-MM-DD&per_page=1"`),
+and note that `git checkout <ref> -- <path>` checks out nothing at all if the path
+guess is wrong (`git ls-tree <ref> <path>` first).
 
 ## The Kotlin runtime, and why a Java-only app has one
 
@@ -151,5 +244,11 @@ died at launch. That is what point 1 of the artifact check above makes impossibl
   free check here is the AAR audit (`aar_floor.py`) plus `minSdk` consistency in
   `verify_apk.py`; checking every `android.*` reference against an API-19 jar needs a
   second `android.jar` and a class-file reader.
+* The vendored JRE has **no `jar` binary** (it is a JRE): build/merge jars with
+  `python3 -m zipfile` or the `zipfile` module, as the from-source recipe above does.
+* Not everything is checkable here: nothing is ever installed or run on a device, no
+  library's manifest is merged (a `<provider>` in an AAR is ignored), resources are
+  merged non-namespaced, and a library this sandbox cannot fetch simply is not there
+  (`kotlinx.coroutines` is the one that bites: see `androidx-known-dangling.txt`).
 * `vendor/` is gitignored and reproducible: deleting it and re-running `setup.sh`
   takes ~11 s, and `androidx.sh` rebuilds the AndroidX part in ~31 s.
