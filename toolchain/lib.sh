@@ -124,6 +124,9 @@ PATCH
 }
 
 # --- AndroidX (optional) ----------------------------------------------------
+# Set by the environment when the script starts, before any of this code chose a
+# default (see androidx_setup).
+ANDROIDX_DIR_FROM_ENV="${ANDROIDX_DIR:-}"
 # toolchain/androidx.sh installs vendor/androidx/{androidx.jar,res/*.zip,
 # packages.txt}. When present, every AndroidX reference resolves without any
 # flag: the jar goes on ECJ's classpath and into the dexer, the compiled
@@ -131,9 +134,12 @@ PATCH
 # each library's R class (the same trick AGP uses). ANDROIDX_OFF=1 skips all of
 # it, which is what --no-androidx sets.
 androidx_setup() {
-  # remember whether the caller named a directory, so a missing one is an error
-  # instead of "AndroidX simply not installed here"
-  ANDROIDX_DIR_EXPLICIT="${ANDROIDX_DIR:-}"
+  # Whether the *caller* named a directory (ANDROIDX_DIR=... ./check.sh) decides
+  # if a missing one is an error or merely "AndroidX is not installed here yet".
+  # It has to be captured when lib.sh is loaded: this function runs twice (an
+  # early probe from load_env, then for real after argument parsing) and the
+  # second run would otherwise mistake the first run's default for a user choice.
+  ANDROIDX_DIR_EXPLICIT="$ANDROIDX_DIR_FROM_ENV"
   ANDROIDX_DIR="${ANDROIDX_DIR:-$GH_TOOLCHAIN/androidx}"
   ANDROIDX_CLASSES=""
   ANDROIDX_LIBS=()
