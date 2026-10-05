@@ -17,6 +17,11 @@ ok()   { printf '    \033[32mok\033[0m %s\n' "$*"; }
 die()  { printf '\033[31m    error:\033[0m %s\n' "$*" >&2; exit 1; }
 
 load_env() {
+  # env.sh (generated) re-exports the vendor paths unconditionally, so a caller's
+  # `ANDROID_JAR=/path/to/other.jar bash toolchain/check.sh ...` is discarded
+  # without a word: the level does not change and nothing says why. Compare and
+  # report; the supported route to another platform is `setup.sh --api N`.
+  local pre_android_jar="${ANDROID_JAR:-}"
   if [ -f "$TC_DIR/env.sh" ]; then
     # shellcheck disable=SC1091
     . "$TC_DIR/env.sh"
@@ -38,8 +43,84 @@ load_env() {
   [ -x "$JAVA_HOME/bin/java" ] || die "no JRE at $JAVA_HOME -- run: bash toolchain/setup.sh"
   [ -s "$ECJ_JAR" ]           || die "no ECJ at $ECJ_JAR -- run: bash toolchain/setup.sh"
   [ -x "$AAPT2" ]             || die "no aapt2 at $AAPT2 -- run: bash toolchain/setup.sh"
+  if [ -n "$pre_android_jar" ] && [ "$pre_android_jar" != "$ANDROID_JAR" ]; then
+    info "note: ANDROID_JAR=$pre_android_jar was overridden by env.sh -> $ANDROID_JAR"
+    info "      (for another platform level run: bash toolchain/setup.sh --api N)"
+  fi
   JAVA=("$JAVA_HOME/bin/java")
   androidx_setup
+}
+
+
+# --- AndroidManifest package, when the project is a real AGP app ------------
+# Since AGP 7 the manifest needs no package="..." attribute: the module declares
+# it in build.gradle(.kts) as `namespace = "..."`. aapt2 does not know that and
+# refuses to link ("<manifest> must have a 'package' attribute"), so a project
+# built by Gradle is not buildable here until the namespace is put back - and
+# hand-patching the real manifest breaks the Gradle build the check exists to
+# mirror. Resolve the namespace (explicit --package wins, then the manifest,
+# then build.gradle[.kts]) and, when it is missing from the manifest, link a
+# patched COPY under the build directory. The project's own files are untouched.
+
+# resolve_package PROJECT_DIR [EXPLICIT] -> sets MANIFEST_PACKAGE / MANIFEST_GRADLE
+resolve_package() {
+  local proj="$1" explicit="${2:-}" f m
+  MANIFEST_PACKAGE=""
+  MANIFEST_GRADLE=""
+  if [ -n "$explicit" ]; then
+    MANIFEST_PACKAGE="$explicit"
+    return 0
+  fi
+  if [ -f "$MANIFEST" ]; then
+    m=$(sed -n 's/.*<manifest[^>]*package="\([^"]*\)".*/\1/p' "$MANIFEST" | sed -n '1p')
+    if [ -n "$m" ]; then
+      MANIFEST_PACKAGE="$m"
+      return 0
+    fi
+  fi
+  for f in "$proj/build.gradle.kts" "$proj/build.gradle" \
+           "$proj/app/build.gradle.kts" "$proj/app/build.gradle" \
+           "$proj/../build.gradle.kts" "$proj/../build.gradle"; do
+    [ -f "$f" ] || continue
+    m=$(python3 - "$f" <<'GRADLE'
+import re, sys
+text = open(sys.argv[1], encoding="utf-8", errors="ignore").read()
+m = re.search(r"namespace\s*=?\s*[\"']([^\"']+)[\"']", text)
+print(m.group(1) if m else "")
+GRADLE
+)
+    if [ -n "$m" ]; then
+      MANIFEST_PACKAGE="$m"
+      MANIFEST_GRADLE="$f"
+      return 0
+    fi
+  done
+  return 0
+}
+
+# manifest_for_link BUILD_DIR -- point MANIFEST at a copy carrying package="...")
+# when the project's manifest has none. Safe to call repeatedly.
+manifest_for_link() {
+  local outdir="$1"
+  [ -n "${MANIFEST_PACKAGE:-}" ] || return 0
+  [ -f "$MANIFEST" ] || return 0
+  grep -q '<manifest[^>]*package="' "$MANIFEST" && return 0
+  mkdir -p "$outdir"
+  if python3 - "$MANIFEST" "$outdir/AndroidManifest.xml" "$MANIFEST_PACKAGE" <<'PATCH'
+import re, sys
+src, dst, pkg = sys.argv[1], sys.argv[2], sys.argv[3]
+text = open(src, encoding="utf-8").read()
+if 'package="' in text.split(">", 1)[0]:
+    print("    manifest already has a package attribute")
+else:
+    text = re.sub(r"<manifest\b", '<manifest package="%s"' % pkg, text, count=1)
+    open(dst, "w", encoding="utf-8").write(text)
+PATCH
+  then
+    MANIFEST="$outdir/AndroidManifest.xml"
+    info "manifest has no package= (AGP namespace); linking a copy with package=\"$MANIFEST_PACKAGE\""
+  fi
+  return 0
 }
 
 # --- AndroidX (optional) ----------------------------------------------------
@@ -50,13 +131,42 @@ load_env() {
 # each library's R class (the same trick AGP uses). ANDROIDX_OFF=1 skips all of
 # it, which is what --no-androidx sets.
 androidx_setup() {
+  # remember whether the caller named a directory, so a missing one is an error
+  # instead of "AndroidX simply not installed here"
+  ANDROIDX_DIR_EXPLICIT="${ANDROIDX_DIR:-}"
   ANDROIDX_DIR="${ANDROIDX_DIR:-$GH_TOOLCHAIN/androidx}"
   ANDROIDX_CLASSES=""
   ANDROIDX_LIBS=()
   ANDROIDX_ARGS=()
   ANDROIDX_STATE="off (--no-androidx)"
   [ "${ANDROIDX_OFF:-0}" = "1" ] && return 0
-  [ -s "$ANDROIDX_DIR/androidx.jar" ] && ANDROIDX_CLASSES="$ANDROIDX_DIR/androidx.jar"
+  # The contract is a *directory* holding androidx.jar + packages.txt (+ res/*.zip
+  # when the harvest has resources) - the layout androidx.sh writes. Pieces missing
+  # do not fail here: the jar silently drops off the classpath and the first
+  # symptom is aapt2 complaining, many seconds later, that
+  # `style/Theme.Material3.DayNight.NoActionBar` does not exist - which blames the
+  # app instead of the incomplete vendor directory. So check the contract now.
+  if [ -n "${ANDROIDX_DIR_EXPLICIT:-}" ] && [ ! -d "$ANDROIDX_DIR" ]; then
+    die "ANDROIDX_DIR=$ANDROIDX_DIR does not exist
+  the contract is a directory holding androidx.jar + packages.txt (+ res/*.zip).
+  Build it with: bash toolchain/androidx.sh
+  (or --no-androidx for a platform-only build)"
+  fi
+  if [ -d "$ANDROIDX_DIR" ]; then
+    if [ ! -s "$ANDROIDX_DIR/androidx.jar" ]; then
+      die "ANDROIDX_DIR=$ANDROIDX_DIR has no androidx.jar
+  an incomplete AndroidX directory fails late and confusingly (the jar is not on
+  the classpath, so every androidx.* reference is a compile error), so it is
+  rejected here. Rebuild it: bash toolchain/androidx.sh"
+    fi
+    if [ ! -f "$ANDROIDX_DIR/packages.txt" ]; then
+      die "ANDROIDX_DIR=$ANDROIDX_DIR has no packages.txt
+  aapt2 gets each vendored package through --extra-packages; without it library
+  resources are unresolvable: 'resource style/Theme.Material3.DayNight.NoActionBar
+  not found'. Rebuild it: bash toolchain/androidx.sh"
+    fi
+  fi
+  ANDROIDX_CLASSES="$ANDROIDX_DIR/androidx.jar"
   # Kotlin's runtime is not optional next to AndroidX: activity/fragment/
   # lifecycle are compiled from Kotlin, so their classes call
   # kotlin.jvm.internal.Intrinsics on ordinary paths (see setup.sh step 8b). It is

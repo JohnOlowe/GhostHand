@@ -187,7 +187,7 @@ def check_xml_files(root_dir, problems):
     return count
 
 
-def check_manifest(root_dir, problems, res_index):
+def check_manifest(root_dir, problems, res_index, declared_package=""):
     manifest = os.path.join(root_dir, "AndroidManifest.xml")
     if not os.path.isfile(manifest):
         # src/main/AndroidManifest.xml is the Gradle layout
@@ -205,9 +205,17 @@ def check_manifest(root_dir, problems, res_index):
                                 "root element is <%s>, expected <manifest>" % root.tag))
         return manifest
 
-    package = root.get("package") or ""
+    package = root.get("package") or declared_package
     if not package:
-        problems.append(Problem(manifest, 0, "error", '<manifest> has no package="..."'))
+        # AGP moved the package out of the manifest into build.gradle(.kts) as
+        # `namespace = "..."`, so a modern manifest legitimately has none - but
+        # aapt2 still refuses to link without one. Say what to do about it rather
+        # than calling the project broken.
+        problems.append(Problem(manifest, 0, "error",
+                                '<manifest> has no package="..." and none was given '
+                                '(AGP keeps it in build.gradle.kts as namespace=; '
+                                'pass --package NAME or let the tools read it from '
+                                'there - they link a patched copy, never this file)'))
     elif not re.match(r"^[a-zA-Z]\w*(\.[a-zA-Z]\w*)+$", package):
         problems.append(Problem(manifest, 0, "error",
                                 'package="%s" is not a valid Java package' % package))
@@ -361,7 +369,7 @@ def _check_values_dir(res_dir, problems):
                                             "<string name=%r> contains an unescaped apostrophe" % rname))
 
 
-def run(root_dirs, as_json=False, extra_res_dirs=()):
+def run(root_dirs, as_json=False, extra_res_dirs=(), declared_package=""):
     all_problems = []
     for root_dir in root_dirs:
         if not os.path.isdir(root_dir):
@@ -371,7 +379,7 @@ def run(root_dirs, as_json=False, extra_res_dirs=()):
         n_xml = check_xml_files(root_dir, problems)
         res_index = collect_resources(root_dir, extra_res_dirs)
         check_values(root_dir, problems)
-        check_manifest(root_dir, problems, res_index)
+        check_manifest(root_dir, problems, res_index, declared_package)
         check_refs(root_dir, problems, res_index)
         problems.insert(0, Problem(root_dir, None, "info",
                                    "%d XML file(s), %d resource type(s): %s"
@@ -398,12 +406,15 @@ def run(root_dirs, as_json=False, extra_res_dirs=()):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Android XML/manifest linter")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--package", default="", metavar="NAME",
+                    help="the application package when AndroidManifest.xml has no "
+                         "package= attribute (AGP: build.gradle.kts `namespace`)")
     ap.add_argument("--extra-res", action="append", default=[], metavar="DIR",
                     help="library res/ directory to index for reference checks "
                          "(repeatable; used for AndroidX AARs)")
     ap.add_argument("dirs", nargs="+")
     a = ap.parse_args(argv)
-    return run(a.dirs, a.json, a.extra_res)
+    return run(a.dirs, a.json, a.extra_res, a.package)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 #
 #   bash toolchain/build.sh PROJECT_DIR [--api 34] [--min-api 24] [--release]
 #                                      [--source 8] [--out FILE] [--verify]
-#                                      [--no-androidx]
+#                                      [--no-androidx] [--package NAME]
 #
 # Pipeline: xmllint -> aapt2 compile -> aapt2 link (+R.java) -> ECJ -> D8/R8
 #           -> classes.dex into the APK -> zipalign.py -> apksigner -> verify
@@ -26,6 +26,7 @@ while [ $# -gt 0 ]; do
     --out) OUT="$2"; shift 2 ;;
     --verify) VERIFY=1; shift ;;
     --no-androidx) ANDROIDX_OFF=1; shift ;;
+    --package) PKG_ARG="$2"; shift 2 ;;
     -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
     -*) die "unknown option $1" ;;
     *) PROJ_ARG="$1"; shift ;;
@@ -43,6 +44,8 @@ UNSIGNED="$BUILD/$APK_NAME-unsigned.apk"
 ALIGNED="$BUILD/$APK_NAME-aligned.apk"
 FINAL="${OUT:-$BUILD/$APK_NAME.apk}"
 mkdir -p "$BUILD" "$STAGE"
+resolve_package "$PROJ" "${PKG_ARG:-}"
+manifest_for_link "$BUILD"
 START=$(date +%s)
 
 msg "building $PROJ"
@@ -51,7 +54,8 @@ info "androidx: ${ANDROIDX_STATE:-none}"
 
 # 1. XML pre-flight ---------------------------------------------------------
 msg "1/7 XML lint"
-python3 "$HERE/xmlcheck.py" "$PROJ" "${ANDROIDX_XML_ARGS[@]+"${ANDROIDX_XML_ARGS[@]}"}" \
+python3 "$HERE/xmlcheck.py" "$PROJ" --package "${MANIFEST_PACKAGE:-}" \
+    "${ANDROIDX_XML_ARGS[@]+"${ANDROIDX_XML_ARGS[@]}"}" \
   || die "XML problems above (aapt2 would fail on most of them too)"
 
 # 2. resources --------------------------------------------------------------
@@ -126,8 +130,17 @@ msg "result"
 info "APK: $FINAL ($(du -h "$FINAL" | cut -f1))"
 
 msg "verify: is the artifact actually intact?"
+# The vendored AndroidX closure names libraries this sandbox cannot fetch
+# (kotlinx.coroutines, from lifecycle's optional dispatcher). Those dangles are a
+# property of the harvest, not of the app, so the toolchain excuses them from a
+# file that travels with it - loudly, and without the project having to restate
+# the limitation. A *project* entry stays fatal when stale; the baseline does not.
+BASELINE_ARGS=()
+[ -s "$ANDROIDX_DIR/known-dangling.txt" ] \
+  && BASELINE_ARGS=(--baseline "$ANDROIDX_DIR/known-dangling.txt")
 python3 "$HERE/verify_apk.py" "$FINAL" --manifest "$MANIFEST" \
   --allowlist "$PROJ/packaging-allowlist.txt" \
+  "${BASELINE_ARGS[@]+"${BASELINE_ARGS[@]}"}" \
   --kind "$( [ "$RELEASE" = 1 ] && echo release || echo debug )" \
   || die "the APK is not installable (see the failures above)"
 

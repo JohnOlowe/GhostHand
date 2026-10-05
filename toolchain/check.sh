@@ -5,7 +5,7 @@
 #
 #   bash toolchain/check.sh PROJECT_DIR [--api 34] [--min-api 24] [--source 8]
 #                                       [--no-dex] [--no-xml-lint] [--no-androidx]
-#                                       [--full-dex]
+#                                       [--full-dex] [--package NAME]
 #
 # Exit code 0 means: every XML file parses, every resource reference resolves,
 # the manifest survives aapt2 link, and every .java file type-checks against
@@ -28,6 +28,7 @@ while [ $# -gt 0 ]; do
     --no-dex) NO_DEX=1; shift ;;
     --no-xml-lint) XML_LINT=0; shift ;;
     --no-androidx) ANDROIDX_OFF=1; shift ;;
+    --package) PKG_ARG="$2"; shift 2 ;;
     --full-dex) FULL_DEX=1; shift ;;
     -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
     -*) die "unknown option $1" ;;
@@ -44,6 +45,8 @@ detect_layout "$PROJ_ARG"
 [ "$ANDROID_JAR" = "$GH_TOOLCHAIN/android.jar" ] && export ANDROID_JAR
 BUILD="$PROJ/build/check"
 rm -rf "$BUILD"; mkdir -p "$BUILD"
+resolve_package "$PROJ" "${PKG_ARG:-}"
+manifest_for_link "$BUILD"
 START=$(date +%s)
 FAILED=0
 
@@ -56,7 +59,8 @@ info "androidx: ${ANDROIDX_STATE:-none}"
 # --- 1. XML ---------------------------------------------------------------
 if [ "$XML_LINT" = "1" ]; then
   msg "1/4 XML lint (xmlcheck.py)"
-  python3 "$HERE/xmlcheck.py" "$PROJ" "${ANDROIDX_XML_ARGS[@]+"${ANDROIDX_XML_ARGS[@]}"}" || FAILED=1
+  python3 "$HERE/xmlcheck.py" "$PROJ" --package "${MANIFEST_PACKAGE:-}" \
+    "${ANDROIDX_XML_ARGS[@]+"${ANDROIDX_XML_ARGS[@]}"}" || FAILED=1
 else
   info "1/4 XML lint skipped"
 fi
