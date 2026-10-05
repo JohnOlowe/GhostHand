@@ -1,0 +1,26 @@
+# androidx-known-dangling.txt -- types the *vendored* AndroidX closure names that
+# this sandbox cannot provide, so verify_apk.py does not blame the app for them.
+#
+# Why this file exists, separately from a project's packaging-allowlist.txt:
+# androidx.sh harvests the whole AndroidX closure, and parts of it talk to
+# libraries that are not AndroidX and cannot be fetched here (Maven/Google hosts
+# are unreachable - see RECIPE.md). The references are real, but they sit on
+# optional code paths that a project which never opted into those libraries never
+# reaches. A project should not have to re-declare the same known limitation in
+# every packaging-allowlist.txt, so the toolchain carries it here, once, next to
+# the harvest it describes.
+#
+# Difference from packaging-allowlist.txt, enforced in verify_apk.py:
+#   * an entry here excuses types for *every* project using this harvest;
+#   * an entry here that stops suppressing something is reported, not fatal (a
+#     harvest that shrinks must not fail every build - unlike a project entry,
+#     which is scoped to one app and must not rot silently);
+#   * excused types are counted and printed on every run, so the limitation stays
+#     visible instead of turning into a green check nobody remembers.
+#
+# Grammar:  <class or prefix>  [both|release|debug]  <reason>
+#
+# If your *own* code uses one of these families, the baseline does not save you:
+# the class is genuinely absent at runtime. Add the artifact to the harvest, or
+# accept the crash on that path - do not "fix" it by deleting this file.
+kotlinx/coroutines/**  both  androidx.lifecycle's optional coroutine dispatcher (PausingDispatcher); kotlinx-coroutines is not AndroidX and Maven is unreachable here
