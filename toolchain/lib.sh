@@ -200,6 +200,13 @@ androidx_setup() {
     for d in "$ANDROIDX_DIR"/aar/*/res; do
       [ -d "$d" ] && ANDROIDX_XML_ARGS+=(--extra-res "$d")
     done
+  elif [ -n "$ANDROIDX_CLASSES" ]; then
+    # The *link* still works (aapt2 gets the compiled res/*.zip), but the lint
+    # runs before aapt2 and can only resolve what it can read: without the AARs'
+    # source res/ it cannot see @style/Theme.Material3... and reports the app's
+    # theme as undefined - the message that blames the app for the state of the
+    # vendor directory. Say where the limitation comes from.
+    ANDROIDX_RES_NOTE="androidx: $ANDROIDX_DIR has no aar/ (source res dirs), so xmlcheck cannot resolve library styles/fonts; androidx.sh's output keeps them"
   fi
 }
 
@@ -219,7 +226,22 @@ detect_layout() {
     MANIFEST="$PROJ/AndroidManifest.xml"
   fi
   ASSETS_DIR="$(dirname "$MANIFEST")/assets"
-  [ -f "$MANIFEST" ] || die "no AndroidManifest.xml under $dir"
+  if [ ! -f "$MANIFEST" ]; then
+    # Both layouts can exist at once (a flat manifest plus a Gradle-ish
+    # src/main/res), and then the Gradle layout wins. Say which manifest *does*
+    # exist instead of claiming there is none - "no AndroidManifest.xml under X"
+    # for a directory that visibly contains one is the kind of message that
+    # sends people looking in the wrong place.
+    local other="$PROJ/AndroidManifest.xml"
+    [ -d "$PROJ/src/main" ] || other="$PROJ/src/main/AndroidManifest.xml"
+    if [ -f "$other" ]; then
+      die "no AndroidManifest.xml under $dir
+  this project mixes layouts: src/main/ makes the Gradle layout win, and it wants
+  $MANIFEST; the manifest that exists is $other
+  move it to the Gradle position, or point the tools at a directory without src/main/"
+    fi
+    die "no AndroidManifest.xml under $dir"
+  fi
   # The floor is the manifest's own minSdkVersion unless --min-api overrides it:
   # it decides aapt2's versioning rules, D8 --min-api and whether apksigner must
   # write a v1 signature. A flag default that disagrees with the artifact is how

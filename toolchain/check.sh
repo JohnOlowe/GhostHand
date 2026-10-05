@@ -55,6 +55,7 @@ info "sources: $SRC_DIR ($(count_java) .java files)"
 info "res:     $RES_DIR"
 info "jre:     $("$JAVA_HOME/bin/java" -version 2>&1 | sed -n '1p')"
 info "androidx: ${ANDROIDX_STATE:-none}"
+[ -n "${ANDROIDX_RES_NOTE:-}" ] && info "$ANDROIDX_RES_NOTE"
 
 # --- 1. XML ---------------------------------------------------------------
 if [ "$XML_LINT" = "1" ]; then

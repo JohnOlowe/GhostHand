@@ -51,6 +51,7 @@ START=$(date +%s)
 msg "building $PROJ"
 info "java $JAVA_SRC_LEVEL, min API $MIN_API, target API $TARGET_API, $( [ "$RELEASE" = 1 ] && echo 'R8 release' || echo 'D8 debug' )"
 info "androidx: ${ANDROIDX_STATE:-none}"
+[ -n "${ANDROIDX_RES_NOTE:-}" ] && info "$ANDROIDX_RES_NOTE"
 
 # 1. XML pre-flight ---------------------------------------------------------
 msg "1/7 XML lint"
