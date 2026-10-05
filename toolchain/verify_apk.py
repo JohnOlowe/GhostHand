@@ -18,7 +18,8 @@ crash on a phone:
    without kotlin-stdlib in the dex every launch crashed. Every type the dex
    names under android*/com.google*/kotlin*/kotlinx*/org.jetbrains* must be
    defined in the APK or declared in packaging-allowlist.txt with a reason
-   (and a stale entry fails, so the file cannot rot).
+   (and a stale entry fails, so the file cannot rot). Types the *toolchain*
+   cannot provide - see --baseline - are excused but counted out loud.
 
 2. **Dex count against the declared minSdkVersion.** Dalvik (API < 21) loads
    exactly one dex file: an APK that claims minSdk 19 and ships classes2.dex
@@ -46,6 +47,7 @@ import subprocess
 import sys
 import zipfile
 
+BASELINE_NAME = "toolchain/androidx-known-dangling.txt"
 DEFAULT_PREFIXES = ("androidx/", "com/google/", "kotlin/", "kotlinx/", "org/jetbrains/")
 ALLOW_SCOPES = ("both", "release", "debug")
 COMPONENT_TAGS = ("application", "activity", "activity-alias", "service",
@@ -174,13 +176,20 @@ def allowed(pattern, name):
 
 # ---------------------------------------------------------------------- checks
 
-def check_self_contained(defined, referenced, allowlist, kind, log):
+def check_self_contained(defined, referenced, allowlist, baseline, kind, log):
     allow = {p: v for p, v in allowlist.items()
              if kind is None or v[0] in ("both", kind)}
-    missing = sorted(t for t in referenced
-                     if t.startswith(DEFAULT_PREFIXES) and t not in defined
+    base = {p: v for p, v in baseline.items()
+            if kind is None or v[0] in ("both", kind)}
+    undefined = [t for t in referenced if t.startswith(DEFAULT_PREFIXES)
+                 and t not in defined]
+    missing = sorted(t for t in undefined
+                     if not any(allowed(p, t) for p in allow)
+                     and not any(allowed(p, t) for p in base))
+    used = {p for p in allow if any(allowed(p, t) for t in undefined)}
+    used_base = {p for p in base if any(allowed(p, t) for t in undefined)}
+    excused = sorted(t for t in undefined if t not in set(missing)
                      and not any(allowed(p, t) for p in allow))
-    used = {p for p in allow if any(allowed(p, t) for t in referenced if t not in defined)}
     problems = 0
     if missing:
         log("    %s %d type(s) the dex names but the APK does not define:"
@@ -192,11 +201,25 @@ def check_self_contained(defined, referenced, allowlist, kind, log):
         log("        (a missing class is a NoClassDefFoundError on the code path that"
             " touches it: add the artifact, or declare it in packaging-allowlist.txt)")
         problems += 1
+    if excused:
+        # Not a failure, and deliberately still loud: the classes really are
+        # absent, so code that uses one of these families crashes on that path.
+        log("    note %d type(s) excused by the toolchain baseline "
+            "(%s): code that uses them fails at runtime" % (len(excused), BASELINE_NAME))
+        for t in excused[:3]:
+            log("         %s" % t)
+        if len(excused) > 3:
+            log("         ... and %d more" % (len(excused) - 3))
     stale = sorted(p for p in allow if p not in used)
     if stale:
         log("    %s %d allowlist entr(y/ies) no longer suppress anything: %s"
             % (red("FAIL"), len(stale), ", ".join(stale[:5])))
         problems += 1
+    stale_base = sorted(p for p in base if p not in used_base)
+    if stale_base:
+        log("    note %d baseline entr(y/ies) no longer fire (the harvest or the "
+            "shrinker changed; the file can shrink): %s"
+            % (len(stale_base), ", ".join(stale_base[:5])))
     return problems
 
 
@@ -306,6 +329,10 @@ def main(argv=None):
     ap.add_argument("apk")
     ap.add_argument("--manifest", default="")
     ap.add_argument("--allowlist", default="")
+    ap.add_argument("--baseline", action="append", default=[], metavar="FILE",
+                    help="toolchain-owned list of types the vendored AndroidX "
+                         "names but cannot provide (androidx-known-dangling.txt); "
+                         "excused types are printed, stale entries are not fatal")
     ap.add_argument("--kind", choices=ALLOW_SCOPES, default=None,
                     help="which configuration this APK is (default: infer from the "
                          "manifest's android:debuggable, else unknown)")
@@ -332,7 +359,10 @@ def main(argv=None):
     log("    %s: %d dex, %d entries" % (args.apk, len(dexes), len(entries)))
     dexes, defined, referenced = apk_type_tables(args.apk)
     allowlist = read_allowlist(args.allowlist)
-    problems = check_self_contained(defined, referenced, allowlist, kind, log)
+    baseline = {}
+    for path in args.baseline:
+        baseline.update(read_allowlist(path))
+    problems = check_self_contained(defined, referenced, allowlist, baseline, kind, log)
     problems += check_components(args.manifest, defined, log)
     problems += check_dex_count(dexes, declared_min_sdk(args.apk, aapt2), log)
     problems += check_vectors(args.apk, log)
