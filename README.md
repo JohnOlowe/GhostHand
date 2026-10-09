@@ -14,6 +14,9 @@ Android work in a sandbox with no Android SDK, no Gradle, no Maven and no root.
   `build.sh` ends by checking the *artifact* (self-containment, manifest components,
   dex count against the declared floor, vector bases) — see RECIPE.md section 9.5 for
   the six defects that made those checks necessary.
+* **[BT-AUDIO-LOCAL.md](BT-AUDIO-LOCAL.md)** — build/test BT-Audio's C#, WinForms,
+  and PowerShell sender locally, without Actions. Includes an explicitly opt-in
+  workaround for this sandbox's blocked .NET/NuGet download hosts and its limits.
 
 ```bash
 bash toolchain/setup.sh                 # ~11 s
