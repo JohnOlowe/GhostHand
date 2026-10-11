@@ -17,6 +17,10 @@ Android work in a sandbox with no Android SDK, no Gradle, no Maven and no root.
 * **[BT-AUDIO-LOCAL.md](BT-AUDIO-LOCAL.md)** — build/test BT-Audio's C#, WinForms,
   and PowerShell sender locally, without Actions. Includes an explicitly opt-in
   workaround for this sandbox's blocked .NET/NuGet download hosts and its limits.
+* **[REVERSE-TOOLS.md](REVERSE-TOOLS.md)** — use JADX, Apktool, and CFR here, including
+  a fresh-temp bootstrap/test script, the verified commands, and version/provenance
+  limits. **[AGENTS.md](AGENTS.md)** tells coding agents how to stay within the 128 MB
+  artifact budget and clean up generated tools and outputs.
 
 ```bash
 bash toolchain/setup.sh                 # ~11 s
@@ -27,4 +31,6 @@ bash toolchain/build.sh sample --verify # signed, zipaligned APK
 bash toolchain/androidx.sh              # ~31 s: fetch AndroidX (no Maven involved)
 bash toolchain/check.sh sample-androidx
 bash toolchain/build.sh sample-androidx --release --verify
+
+bash toolchain/reverse-tools.sh test     # fetch/test JADX, Apktool, CFR; auto-cleans tools
 ```

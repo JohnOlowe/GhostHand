@@ -17,28 +17,37 @@ ok()   { printf '    \033[32mok\033[0m %s\n' "$*"; }
 die()  { printf '\033[31m    error:\033[0m %s\n' "$*" >&2; exit 1; }
 
 load_env() {
+  # setup.sh --vendor DIR writes its generated env.sh alongside DIR. Accept an
+  # explicit external env file so build tools can stay outside the checkout.
   # env.sh (generated) re-exports the vendor paths unconditionally, so a caller's
   # `ANDROID_JAR=/path/to/other.jar bash toolchain/check.sh ...` is discarded
   # without a word: the level does not change and nothing says why. Compare and
   # report; the supported route to another platform is `setup.sh --api N`.
   local pre_android_jar="${ANDROID_JAR:-}"
-  if [ -f "$TC_DIR/env.sh" ]; then
+  local env_file="${GH_TOOLCHAIN_ENV:-$TC_DIR/env.sh}"
+  if [ -n "${GH_TOOLCHAIN_ENV:-}" ]; then
+    [ -f "$env_file" ] || die "GH_TOOLCHAIN_ENV=$env_file does not exist"
+    # shellcheck disable=SC1090
+    . "$env_file"
+  elif [ -f "$env_file" ]; then
     # shellcheck disable=SC1091
-    . "$TC_DIR/env.sh"
+    . "$env_file"
   else
-    export GH_TOOLCHAIN="$TC_DIR/vendor"
-    export JAVA_HOME="$GH_TOOLCHAIN/jre"
-    export ECJ_JAR="$GH_TOOLCHAIN/ecj.jar"
-    export D8_JAR="$GH_TOOLCHAIN/d8.jar"
-    export APKSIGNER_JAR="$GH_TOOLCHAIN/apksigner.jar"
-    export APKTOOL_JAR="$GH_TOOLCHAIN/apktool.jar"
-    export ANDROID_JAR="$GH_TOOLCHAIN/android.jar"
-    export ANDROID_CLASSPATH_JAR="$GH_TOOLCHAIN/android-classpath.jar"
-    export AAPT2="$GH_TOOLCHAIN/aapt2"
-    export DEBUG_KEYSTORE="$GH_TOOLCHAIN/debug.keystore"
-    export JUNIT_JAR="$GH_TOOLCHAIN/junit.jar"
-    export HAMCREST_JAR="$GH_TOOLCHAIN/hamcrest.jar"
-    export LAMBDA_STUBS_JAR="$GH_TOOLCHAIN/core-lambda-stubs.jar"
+    export GH_TOOLCHAIN="${GH_TOOLCHAIN:-$TC_DIR/vendor}"
+    export JAVA_HOME="${JAVA_HOME:-$GH_TOOLCHAIN/jre}"
+    export ECJ_JAR="${ECJ_JAR:-$GH_TOOLCHAIN/ecj.jar}"
+    export D8_JAR="${D8_JAR:-$GH_TOOLCHAIN/d8.jar}"
+    export APKSIGNER_JAR="${APKSIGNER_JAR:-$GH_TOOLCHAIN/apksigner.jar}"
+    export APKTOOL_JAR="${APKTOOL_JAR:-$GH_TOOLCHAIN/apktool.jar}"
+    export ANDROID_JAR="${ANDROID_JAR:-$GH_TOOLCHAIN/android.jar}"
+    export ANDROID_CLASSPATH_JAR="${ANDROID_CLASSPATH_JAR:-$GH_TOOLCHAIN/android-classpath.jar}"
+    export AAPT2="${AAPT2:-$GH_TOOLCHAIN/aapt2}"
+    export DEBUG_KEYSTORE="${DEBUG_KEYSTORE:-$GH_TOOLCHAIN/debug.keystore}"
+    export JUNIT_JAR="${JUNIT_JAR:-$GH_TOOLCHAIN/junit.jar}"
+    export HAMCREST_JAR="${HAMCREST_JAR:-$GH_TOOLCHAIN/hamcrest.jar}"
+    export LAMBDA_STUBS_JAR="${LAMBDA_STUBS_JAR:-$GH_TOOLCHAIN/core-lambda-stubs.jar}"
+    export KOTLIN_STDLIB_JAR="${KOTLIN_STDLIB_JAR:-$GH_TOOLCHAIN/kotlin-stdlib.jar}"
+    export KOTLIN_ANNOTATIONS_JAR="${KOTLIN_ANNOTATIONS_JAR:-$GH_TOOLCHAIN/kotlin-annotations.jar}"
   fi
   [ -x "$JAVA_HOME/bin/java" ] || die "no JRE at $JAVA_HOME -- run: bash toolchain/setup.sh"
   [ -s "$ECJ_JAR" ]           || die "no ECJ at $ECJ_JAR -- run: bash toolchain/setup.sh"

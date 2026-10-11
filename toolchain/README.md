@@ -37,6 +37,7 @@ Gradle layout (`src/main/AndroidManifest.xml`, `src/main/res`, `src/main/java`).
 | `xmlcheck.py` | stdlib-only Android XML/manifest linter (runs before aapt2) |
 | `zipalign.py` | pure-Python zipalign (rewrite + `-c` check), since build-tools is unreachable |
 | `filter_android_jar.py` | strips JRE-owned packages from android.jar for `-source 11/17` |
+| `reverse-tools.sh` | temporary external bootstrap + smoke tests/CLI for JADX, Apktool, and CFR; removes tools on exit |
 | `lambda-stubs/` | the one class `android.jar` lacks (`LambdaMetafactory`); `setup.sh` compiles it into `vendor/core-lambda-stubs.jar` |
 | `androidx.sh` | fetches AndroidX and assembles `vendor/androidx/` (one-off, needs the network) |
 | `androidx_fetch.py` | blobless clone of the source repo + fetch of the selected AARs/jars |
@@ -252,3 +253,16 @@ died at launch. That is what point 1 of the artifact check above makes impossibl
   (`kotlinx.coroutines` is the one that bites: see `androidx-known-dangling.txt`).
 * `vendor/` is gitignored and reproducible: deleting it and re-running `setup.sh`
   takes ~11 s, and `androidx.sh` rebuilds the AndroidX part in ~31 s.
+
+## APK reverse engineering: JADX, Apktool, CFR
+
+`bash toolchain/reverse-tools.sh test` bootstraps all large tools into a fresh
+external temp directory, builds a sample APK, checks Apktool decode/rebuild, JADX
+APK-to-Java, and CFR `.class`-to-Java, then removes the tools and test outputs.
+For actual inputs see [`../REVERSE-TOOLS.md`](../REVERSE-TOOLS.md). The test is
+intentionally limited to the fallback versions available from this sandbox:
+JADX 1.1.0, Apktool 2.4.1, and CFR 0.152. CFR takes Java bytecode, not DEX.
+
+`setup.sh --vendor /tmp/tools/vendor` now writes `/tmp/tools/env.sh`; run existing
+build/check/test scripts with `GH_TOOLCHAIN_ENV=/tmp/tools/env.sh`. This allows
+large toolchains to stay external rather than accumulating under the checkout.

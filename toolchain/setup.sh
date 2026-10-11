@@ -141,11 +141,18 @@ ok "$("$VENDOR/aapt2" version 2>&1 | tail -1)"
 # ---------------------------------------------------------------------------
 say "5/10 apktool  (npm: apktool-jar)  -- offline APK disassembly, optional but used by --verify"
 if [ ! -s "$VENDOR/apktool.jar" ]; then
-  url=$(npm_url "apktool-jar")
+  # apktool-jar has only 2.4.1 in the NPM registry. The official 3.x release
+  # assets and Maven hosts are blocked in this sandbox, so pin both the package
+  # version and the extracted jar digest rather than silently taking latest.
+  url=$(npm_url "apktool-jar" "2.4.1")
   get "$url" "$TMP/apktool.tgz"
   tar xzf "$TMP/apktool.tgz" -C "$TMP" package/bin/apktool_2.4.1.jar
   cp "$TMP/package/bin/apktool_2.4.1.jar" "$VENDOR/apktool.jar"
 fi
+printf '%s  %s\n' \
+  "042f2cf08393ce556890d87401489bb89684ca8bea1b8708f7fcde075b45bd0a3c038874deaa75627428aef886619ce86eb330a412e5193adb5bd2050784c182" \
+  "$VENDOR/apktool.jar" | sha512sum -c --status \
+  || die "apktool.jar failed the pinned SHA-512 check (expected 2.4.1)"
 ok "$("$VENDOR/jre/bin/java" -jar "$VENDOR/apktool.jar" --version 2>/dev/null | tail -1 || echo 'apktool present')"
 
 # ---------------------------------------------------------------------------

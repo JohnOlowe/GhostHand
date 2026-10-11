@@ -7,6 +7,8 @@ no network access except a small egress allowlist.
 Working implementation lives in [`toolchain/`](toolchain/) — `setup.sh`, `check.sh`,
 `build.sh`, `test.sh`, `xmlcheck.py`, `zipalign.py` — plus a runnable
 [`sample/`](sample/) app and an AndroidX one, [`sample-androidx/`](sample-androidx/).
+For APK/DEX decompilation with **JADX, Apktool, and CFR**, see the separate
+[REVERSE-TOOLS.md](REVERSE-TOOLS.md) recipe and its cleanup-on-exit test script.
 Timings from the sandbox: **setup 11 s, check 2 s, unit tests 2 s, APK build 6 s;
 AndroidX fetch + fuse 31 s (one-off), AndroidX APK build 52 s (Debug) / 35 s (R8).**
 

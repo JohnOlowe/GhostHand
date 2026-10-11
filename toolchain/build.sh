@@ -149,7 +149,11 @@ if [ "$VERIFY" = "1" ]; then
   msg "extra verification"
   if [ -s "$APKTOOL_JAR" ]; then
     rm -rf "$BUILD/apktool-out"
-    "$JAVA" -jar "$APKTOOL_JAR" d -f -o "$BUILD/apktool-out" "$FINAL" >/dev/null 2>&1 \
+    # Keep Apktool's framework cache alongside this build instead of writing
+    # persistent files under ~/.local/share/apktool for a one-off verification.
+    mkdir -p "$BUILD/apktool-framework"
+    "$JAVA" -jar "$APKTOOL_JAR" d -f -p "$BUILD/apktool-framework" \
+      -o "$BUILD/apktool-out" "$FINAL" >/dev/null 2>&1 \
       && ok "apktool decoded the APK back to smali + resources (independent sanity check)" \
       || info "apktool decode failed (not fatal)"
   fi
