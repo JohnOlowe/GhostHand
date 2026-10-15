@@ -2,13 +2,19 @@
 # publish-apk.sh -- publish the built APKs to a branch that NEVER accumulates history.
 #
 #   bash publish-apk.sh [--apk FILE] [--debug-apk FILE] [--branch apk] [--remote origin]
-#                       [--no-push]
+#                       [--current-branch] [--no-push]
 #
-# Two APKs, one commit: the R8-shrunk release build (2.5 MB) and the unobfuscated debug
-# build (5.8 MB). Whichever you grab, it is the same app - same package, same key, same
+# Two APKs, one commit: the R8-shrunk release build and the unobfuscated debug
+# build. Whichever you grab, it is the same app - same package, same key, same
 # versionCode - so either installs straight over the other. That is checked below, not
 # assumed: a mismatched pair would fail with INSTALL_FAILED_UPDATE_INCOMPATIBLE on the
 # phone, which is a bad place to find out.
+#
+# --current-branch: preserve the current source branch and put BOTH APKs in one
+# replaceable tip commit. Older generated APKs are removed from its ancestors;
+# only that branch is force-with-lease pushed. See toolchain/publish_current.py.
+# This is different from --branch: the legacy mode below is ARTIFACT-ONLY/orphan
+# and must never be pointed at a source branch by accident.
 #
 # WHY A SEPARATE BRANCH
 # ---------------------
@@ -40,6 +46,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 
 BRANCH="apk"
+BRANCH_GIVEN=0
+ON_CURRENT_BRANCH=0
 REMOTE="origin"
 APK="app/build/app.apk"
 DEBUG_APK="app/build/app-debug.apk"
@@ -52,7 +60,8 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --apk) APK="$2"; shift 2 ;;
     --debug-apk) DEBUG_APK="$2"; DEBUG_APK_GIVEN=1; shift 2 ;;
-    --branch) BRANCH="$2"; shift 2 ;;
+    --branch) BRANCH="$2"; BRANCH_GIVEN=1; shift 2 ;;
+    --current-branch) ON_CURRENT_BRANCH=1; shift ;;
     --remote) REMOTE="$2"; shift 2 ;;
     --name) NAME="$2"; shift 2 ;;
     --no-push) PUSH=0; shift ;;
@@ -61,8 +70,22 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+ACTIVE_BRANCH="$(git symbolic-ref --quiet --short HEAD || true)"
+if [ "$ON_CURRENT_BRANCH" = "1" ]; then
+  [ -n "$ACTIVE_BRANCH" ] || { echo "--current-branch needs an attached branch" >&2; exit 1; }
+  if [ "$BRANCH_GIVEN" = "1" ] && [ "$BRANCH" != "$ACTIVE_BRANCH" ]; then
+    echo "--current-branch cannot publish to a different --branch" >&2; exit 1
+  fi
+  BRANCH="$ACTIVE_BRANCH"
+  [ "$NAME" = "GhostHand.apk" ] || { echo "--current-branch uses the fixed GhostHand.apk name" >&2; exit 1; }
+elif [ "$BRANCH" = "$ACTIVE_BRANCH" ]; then
+  echo "refusing to replace the checked-out source branch with an artifact-only orphan" >&2
+  echo "use --current-branch to preserve its source and publish a replaceable APK tip" >&2
+  exit 1
+fi
+
 [ -s "$APK" ] || { echo "no APK at $APK -- build it first:" >&2
-                   echo "  bash build.sh --publish    (builds both, then publishes)" >&2
+                   echo "  bash build.sh --publish-here    (builds both, then publishes on this branch)" >&2
                    exit 1; }
 
 # The debug build is optional in the sense that publishing a release-only branch is still
@@ -77,10 +100,21 @@ if [ ! -s "$DEBUG_APK" ]; then
   DEBUG_APK=""
 fi
 
+if [ "$ON_CURRENT_BRANCH" = "1" ] && [ -z "$DEBUG_APK" ]; then
+  echo "--current-branch requires BOTH the release and debug APKs" >&2; exit 1
+fi
+
 JAVA=""
 [ -x toolchain/vendor/jre/bin/java ] && JAVA="toolchain/vendor/jre/bin/java"
 APKSIGNER="toolchain/vendor/apksigner.jar"
 AAPT2="toolchain/vendor/aapt2"
+
+if [ "$ON_CURRENT_BRANCH" = "1" ]; then
+  if [ -z "$JAVA" ] || [ ! -s "$APKSIGNER" ] || [ ! -x "$AAPT2" ]; then
+    echo "current-branch publishing requires the installed toolchain to verify the pair" >&2
+    exit 1
+  fi
+fi
 
 # ---------------------------------------------------------------- sanity checks
 # A valid signature says nothing about whether R8 kept the code the framework reaches by
@@ -149,6 +183,12 @@ if [ -s "$AAPT2" ] && [ -n "$DEBUG_APK" ]; then
     echo "one would not install over the other (INSTALL_FAILED_UPDATE_INCOMPATIBLE)." >&2
     exit 1
   fi
+  if [ "$ON_CURRENT_BRANCH" = "1" ]; then
+    if is_debug "$APK" || ! is_debug "$DEBUG_APK"; then
+      echo "refusing to publish: expected a release APK and a debuggable debug APK" >&2
+      exit 1
+    fi
+  fi
   echo "installable pair: $A_NAME v$A_CODE, both signed by"
   echo "  $A_CERT"
   echo "  release: minSdk $(min_sdk "$APK"), debuggable=$(is_debug "$APK" && echo yes || echo no)"
@@ -186,10 +226,10 @@ BLOB="$(git hash-object -w "$APK")"
 # Which file is which is worth stating plainly: the debug build is the BIGGER one, so
 # "the smaller download" is the release build, not the safe fallback.
 if [ -n "$DEBUG_APK" ]; then
-  APK_TABLE="| File | Size | Runs on | What it is | SHA-256 |
+  APK_TABLE="| File | Size | API floor | What it is | SHA-256 |
 |---|---|---|---|---|
-| \`$NAME\` | $SIZE | Android $(min_sdk "$APK")\+ | **release**, R8-shrunk and optimised, one dex file | \`$SHA256\` |
-| \`$DEBUG_NAME\` | $DEBUG_SIZE | Android $(min_sdk "$DEBUG_APK")\+ | **debug**, unshrunk: nothing renamed or removed, six dex files | \`$DEBUG_SHA256\` |
+| \`$NAME\` | $SIZE | API $(min_sdk "$APK") | **release**, R8-shrunk and optimised, one dex file | \`$SHA256\` |
+| \`$DEBUG_NAME\` | $DEBUG_SIZE | API $(min_sdk "$DEBUG_APK") | **debug**, unshrunk: nothing renamed or removed, six dex files | \`$DEBUG_SHA256\` |
 
 Both are the same app - package \`$(pkg_name "$APK")\`, versionCode \`$(pkg_code "$APK")\`, signed
 by the same key - **so either installs straight over the other**, in either order, keeping
@@ -197,7 +237,7 @@ your data. Two differences are worth knowing:
 
 * R8 renames and inlines things on its way to the smaller file. That is the point of it.
 * The debug build is unshrunk, so it carries whole libraries as separate dex files, and
-  Dalvik (Android 4.4) only ever loads the first one. That is why it declares Android
+  Dalvik (Android 4.4) only ever loads the first one. That is why it declares API
   $(min_sdk "$DEBUG_APK") as its floor and the release build does not: the release build is a
   single dex file and runs on 4.4."
   INSTALL_LIST="git show FETCH_HEAD:$NAME > GhostHand.apk             # smaller, R8-shrunk
@@ -207,6 +247,28 @@ else
 |---|---|---|
 | \`$NAME\` | $SIZE | \`$SHA256\` |"
   INSTALL_LIST="git show FETCH_HEAD:$NAME > GhostHand.apk"
+fi
+
+if [ "$ON_CURRENT_BRANCH" = "1" ]; then
+  INFO_FILE="$(mktemp)"
+  trap 'rm -f "$INFO_FILE"' EXIT
+  cat > "$INFO_FILE" <<EOF
+$APK_TABLE
+
+| | |
+|---|---|
+| Package | \`$(pkg_name "$APK")\` |
+| VersionCode | \`$(pkg_code "$APK")\` |
+| Built/published | $STAMP |
+| Signer | $SIGNER |
+
+Install either APK over your existing app; both retain the same signing key.
+On Android 4.4 use GhostHand.apk (API 19). The plain debug build needs API 21.
+EOF
+  CURRENT_ARGS=(--apk "$APK" --debug-apk "$DEBUG_APK" --info "$INFO_FILE" --remote "$REMOTE")
+  [ "$PUSH" = "0" ] && CURRENT_ARGS+=(--no-push)
+  python3 toolchain/publish_current.py "${CURRENT_ARGS[@]}"
+  exit
 fi
 
 README_FILE="$(mktemp)"
@@ -248,7 +310,7 @@ APK installs straight over the previous one - no uninstalling, no lost settings.
 ## Build them yourself
 
 \`\`\`bash
-bash build.sh                                 # setup + AndroidX + 63 unit tests + release APK
+bash build.sh                                 # setup + AndroidX + unit tests + release APK
 bash build.sh --both                          # both APKs into app/build/
 bash build.sh --publish                       # both, then replace this branch
 \`\`\`

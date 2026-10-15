@@ -3,7 +3,8 @@
 #
 #   bash build.sh              setup -> unit tests -> release APK (R8, ~2.2 MB)
 #   bash build.sh --debug      same but unshrunk (D8, ~5.4 MB) - the safe fallback
-#   bash build.sh --publish    ... and push it to the history-less `apk` branch
+#   bash build.sh --publish    ... and push it to the history-less `apk` branch (legacy)
+#   bash build.sh --publish-here  both APKs as one replaceable tip on THIS source branch
 #   bash build.sh --quick      skip the unit tests
 #   bash build.sh --both       build BOTH configurations into separate files
 #
@@ -78,6 +79,7 @@ VERSION_CODE=15
 VERSION_NAME=0.2.14-androidx
 MODE="release"      # release | debug | both
 PUBLISH=0
+PUBLISH_HERE=0
 RUN_TESTS=1
 
 while [ $# -gt 0 ]; do
@@ -86,6 +88,7 @@ while [ $# -gt 0 ]; do
     --release) MODE="release"; shift ;;
     --both) MODE="both"; shift ;;
     --publish) PUBLISH=1; shift ;;
+    --publish-here) PUBLISH=1; PUBLISH_HERE=1; shift ;;
     --quick|--no-tests) RUN_TESTS=0; shift ;;
     --api) API="$2"; shift 2 ;;
     --min-api) MIN_API="$2"; shift 2 ;;
@@ -188,9 +191,11 @@ echo
 echo "  install:  adb install -r ${VERIFY[0]}"
 echo "  (release: Android 4.4+ / one dex   -   debug: Android 5.0+ / six dex files)"
 echo "  api floor: $MIN_API (release) / $DEBUG_MIN_API (debug) - see check_api.py + api-levels.txt"
-echo "  ship it:  bash publish-apk.sh   (replaces the single artifact on the 'apk' branch)"
+echo "  ship here: bash publish-apk.sh --current-branch   (one replaceable APK tip; source kept)"
 
 if [ "$PUBLISH" = "1" ]; then
   bold "publishing"
-  bash publish-apk.sh --apk "$APK" --debug-apk "$DEBUG_APK"
+  PUBLISH_ARGS=(--apk "$APK" --debug-apk "$DEBUG_APK")
+  [ "$PUBLISH_HERE" = "1" ] && PUBLISH_ARGS+=(--current-branch)
+  bash publish-apk.sh "${PUBLISH_ARGS[@]}"
 fi

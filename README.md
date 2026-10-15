@@ -28,6 +28,9 @@ Package `damjay.control.ghosthand` · **minSdk 19 (Android 4.4)** · targetSdk 3
 
 ---
 
+**APK downloads:** [Release — Android 4.4+](https://github.com/JohnOlowe/GhostHand/raw/refs/heads/arena/01a0d380-ghosthand/GhostHand.apk)
+· [Plain debug — Android 5.0+](https://github.com/JohnOlowe/GhostHand/raw/refs/heads/arena/01a0d380-ghosthand/GhostHand-debug.apk)
+
 ## Quick start
 
 ```bash
@@ -38,11 +41,11 @@ bash build.sh                 # setup + AndroidX + 133 unit tests + signed APK (
 
 `build.sh` installs the toolchain into `toolchain/vendor` (JRE, Eclipse compiler, aapt2,
 D8/R8, apksigner) and harvests AndroidX into `toolchain/vendor/androidx`, then produces a
-**signed, zip-aligned, R8-shrunk APK** at `app/build/app.apk` (2.5 MB, Android 4.4+).
+**signed, zip-aligned, R8-shrunk APK** at `app/build/app.apk` (~2.7 MB, Android 4.4+).
 Want both configurations - the shrunk one and the unobfuscated one - in one go?
 
 ```bash
-bash build.sh --both          # + app/build/app-debug.apk (5.8 MB, debuggable, Android 5.0+)
+bash build.sh --both          # + app/build/app-debug.apk (~6.2 MB, debuggable, Android 5.0+)
 
 adb install -r app/build/app.apk     # on BOTH phones
 ```
@@ -53,54 +56,84 @@ watch.
 
 ---
 
-## Where the APK lives (and why it is not in `main`)
+## Where the APKs live (one current pair, no older builds in branch history)
 
-The APK is a few megabytes and different on every build. Committing it to `main` would add
-a new, non-delta-compressible blob to history on every push, so `git clone` would
-eventually drag along every APK ever built.
+**Download the current build from `arena/01a0d380-ghosthand`:**
 
-So the APKs live on their own branch, and **each publish replaces that branch with a single
-parentless commit**:
+* **[GhostHand.apk — release, Android 4.4+](https://github.com/JohnOlowe/GhostHand/raw/refs/heads/arena/01a0d380-ghosthand/GhostHand.apk)**
+* **[GhostHand-debug.apk — plain debug, Android 5.0+](https://github.com/JohnOlowe/GhostHand/raw/refs/heads/arena/01a0d380-ghosthand/GhostHand-debug.apk)**
+* [Browse the branch/files](https://github.com/JohnOlowe/GhostHand/tree/arena/01a0d380-ghosthand)
+  · [SHA-256s and build information](APK-BUILDINFO.md)
+
+The release is R8-shrunk and fits in one dex; the debug APK is the unshrunk,
+unobfuscated D8 build (six dex files). Both have the same package, versionCode
+and signing certificate, so **either installs straight over the other** on a
+device supporting both, keeping your data. On Android 4.4 use the release APK.
+Every build uses the PalmPay-Clone stable key (`keystore/damjay_debug.keystore`).
+
+At the user's request, both APKs now live on this **source branch**, not just
+in chat downloads. The older `apk` branch is legacy vc14 and is not updated by
+this workflow. `main` is unchanged.
+
+### How the APKs avoid accumulating history
+
+A normal commit for each release would retain every old binary forever. Instead,
+`publish-apk.sh --current-branch` creates **one replaceable artifact tip**:
 
 ```
- apk:  *                                     <- always exactly 1 commit, both APKs
- main: *---*---*---*---*---*---*             <- source history, never a binary
+ arena/01a0d380-ghosthand: source --- source --- source --- [current APK pair]
+                                              ^              ^
+                                  ancestors contain no APKs   one current pair
 ```
 
-**Two builds, both in that one commit:**
+Before each publication, `toolchain/publish_current.py` removes the generated
+`GhostHand.apk`, `GhostHand-debug.apk` and `APK-BUILDINFO.md` from all ancestors,
+drops now-empty generated publication commits, and adds the new pair at the tip.
+If source edits were made after a publication, their contents, authors, messages
+and timestamps are preserved while their parents/trees are rewritten without old
+APKs. Unaffected source commits keep their original IDs. Both-parent source
+merges are retained. It refuses to silently invalidate signed source commits.
 
-| | file | runs on | what it is |
-|---|---|---|---|
-| **2.5 MB** | `GhostHand.apk` | **Android 4.4+** | the **release** build - R8 shrunk, renamed and inlined, one dex file. What to install. |
-| **5.8 MB** | `GhostHand-debug.apk` | Android 5.0+ | the **debug** build - nothing shrunk or renamed, genuinely `android:debuggable`, six dex files. |
+Only the **current branch** is pushed, using an explicit `--force-with-lease`.
+Uncommitted source changes, shallow history or an unincorporated/racing remote
+update stop publication rather than risk losing work. Since this may rewrite
+commit IDs, collaborators should fetch and review the updated branch before
+continuing work. Old APKs are **unreachable from this branch's history**; this is
+not a promise that GitHub immediately deletes all unreachable objects or caches.
+A clone of this branch includes the current APKs, but not a history of old builds.
 
-Both are the *same app*: same package, same versionCode, same key, same signature scheme -
-so **either one installs straight over the other, in either order**, keeping your data.
-Whichever downloads more reliably for you is the right one to take - and on Android 4.4 it
-has to be the release build, because the debug one needs the platform's multi-dex loading.
+**Keep binaries out of `main`:** the source-only commit is the publication tip's
+parent (also recorded in `APK-BUILDINFO.md`). Omit/remove the generated tip before
+merging source into `main`; do not merge the APK publication commit itself.
 
 ```bash
-# get the current builds: one fetch, both files
-git fetch origin apk
-git show FETCH_HEAD:GhostHand.apk > GhostHand.apk                 # smaller
-git show FETCH_HEAD:GhostHand-debug.apk > GhostHand-debug.apk     # bigger, unobfuscated
+# Download the pair from the source branch.
+git fetch origin arena/01a0d380-ghosthand
+git show FETCH_HEAD:GhostHand.apk > GhostHand.apk
+git show FETCH_HEAD:GhostHand-debug.apk > GhostHand-debug.apk
 
-# publish a new pair (force-pushes one orphan commit over the last)
-bash build.sh --publish
+# Build both configurations and publish one replaceable APK tip HERE.
+bash build.sh --publish-here
+
+# Or publish an already-built, verified pair without rebuilding.
+bash publish-apk.sh --current-branch
+# Add --no-push to build a candidate without changing refs/index/working files.
+
+# Publisher regression tests (Git-only, isolated temporary repositories).
+python3 -m unittest discover -s toolchain -p 'test_publish_current.py' -v
 ```
 
-`publish-apk.sh` builds the commit with git plumbing (`hash-object` -> `mktree` ->
-`commit-tree`, pushed with `--force`), so nothing in your working tree is touched and the
-branch can never grow a second commit. It refuses to publish an APK that fails the structural
-check, or one whose signature does not verify, and it **refuses the pair outright if the two
-would not be installable over each other** - it compares the package name, the versionCode
-and the signing certificate before writing anything, because a mismatch there is
-`INSTALL_FAILED_UPDATE_INCOMPATIBLE` on the phone, which is a bad place to discover it. It
-writes both SHA-256s into the branch's README.
+The existing structural, signature and install-over-each-other checks run before
+any publication. The current-branch mode requires **both** APKs, requires the
+verification toolchain, and checks release/debug flags. `.gitignore` still keeps
+ordinary build outputs out of source commits; the publisher deliberately inserts
+only the current generated pair and checksum file in its final commit.
 
-Every APK - from any branch, any machine - is signed with the same key
-(`keystore/damjay_debug.keystore`, the PalmPay-Clone stable key), so a new build **installs
-straight over the previous one**. No uninstall, no `INSTALL_FAILED_UPDATE_INCOMPATIBLE`.
+The original `bash publish-apk.sh --branch apk` / `bash build.sh --publish` mode
+remains available for an artifact-only orphan branch. **Do not point that mode
+at a source branch**: it intentionally contains no source. The script refuses
+that mistake when its target is the checked-out branch; use `--current-branch`
+or `--publish-here` to keep the code.
 
 ---
 
@@ -1208,7 +1241,7 @@ design/                     the icon and splash artwork, and the scripts that cu
   splash-hand.png                   the splash hand, black on white for clean keying
   make_assets.py                    generates every icon/splash resource from those two
   splash_preview.py                 renders the splash loop off-device, as a filmstrip
-publish-apk.sh              push the APK to the single-commit `apk` branch
+publish-apk.sh              verified pair; --current-branch = one replaceable APK tip
 RECIPE.md                   how the SDK-less toolchain was assembled, and what fails
 sample/                     toy framework-only project used as a toolchain smoke test
 sample-androidx/            toy AndroidX project: AppCompat + Material 3 + RecyclerView
