@@ -33,7 +33,7 @@ Package `damjay.control.ghosthand` · **minSdk 19 (Android 4.4)** · targetSdk 3
 ```bash
 git clone https://github.com/JohnOlowe/GhostHand.git
 cd GhostHand
-bash build.sh                 # setup + AndroidX + 118 unit tests + signed APK (~2.5 min cold)
+bash build.sh                 # setup + AndroidX + 133 unit tests + signed APK (~2.5 min cold)
 ```
 
 `build.sh` installs the toolchain into `toolchain/vendor` (JRE, Eclipse compiler, aapt2,
@@ -261,7 +261,8 @@ app/src/main/java/damjay/control/ghosthand/
 │   └── SplashChoreography.java    the splash timeline as arithmetic - NO android.*
 │
 └── guest/                       everything that runs on the phone doing the watching
-    ├── GuestController.java       mDNS discovery + socket + frame dispatch
+    ├── GuestController.java       mDNS + session-scoped state + main-thread callbacks
+    ├── GuestConnection.java       bounded FIFO, socket reader/writer/closer - NO android.*
     └── VideoDecoder.java          MediaCodec H.264 decoder + frame pacing
 ```
 
@@ -290,7 +291,7 @@ activities (the humans).
    │                                                                 │ TCP
    └── (activity listens for ACTION_STATE/ACTION_STATS)              │
                                                                      ▼
-                                                          GuestController.reader
+                                                          GuestConnection.reader
                                                             │                │
                                           VIDEO (reader thread)      control frames
                                                             ▼                ▼
@@ -302,7 +303,9 @@ activities (the humans).
 
 * **Host -> guest** runs one way and continuously: `VIDEO` frames plus occasional
   `VIDEO_CONFIG`, `GEOMETRY`, `STATS`, `PONG`, `BYE`.
-* **Guest -> host** carries `HELLO`, `PING` and `TOUCH`.
+* **Guest -> host** carries `HELLO`, `PING`, `TOUCH`, `GLOBAL_ACTION` and the
+  clipboard commands. The main thread only queues them; `GuestConnection.writer`
+  owns all writes, including the watchdog's PINGs.
 * The service and the activity never touch each other's objects - commands go in by
   `startForegroundService(intent)`, state comes back by **package-private broadcast**, which
   is why Home-ing out of `HostActivity` does not interrupt the stream.
@@ -516,6 +519,60 @@ and the round-trip time is shown in the UI. The socket is set to a 1-second read
 the reader thread wakes up regularly: if **20 seconds** pass with no traffic in either
 direction, the guest declares the link dead and closes it, rather than showing a frozen last
 frame forever.
+
+### Sending controls: a lock is not a background thread
+
+The non-KitKat guest's first touch exposed a real bug in vc14:
+
+```
+GuestActivity.onTouch (main thread)
+  -> GuestController.sendTouch -> sendFrame
+  -> synchronized (socket) { FrameCodec.write(...) }
+  -> SocketOutputStream.write -> NetworkOnMainThreadException
+```
+
+The lock prevented two frames from interleaving; it **never changed the thread**
+doing the write. Catching `IOException` did not help either: Android's
+`NetworkOnMainThreadException` is unchecked. Navigation and clipboard commands
+shared the same bug, and disconnect separately wrote a BYE on the UI thread.
+This happened before host-side touch injection, so Shizuku permissions were not
+involved. Do not infer safety from a different phone not having shown the crash.
+
+vc15 introduces `GuestConnection`, a pure-Java transport:
+
+```
+GuestActivity (main) -> GuestController -> GuestConnection.send(frame)
+watchdog (reader) --------------------------^        | nonblocking offer
+                                                    v
+                                             FIFO (128 frames)
+                                                    |
+                                      GuestConnection.writer -> TCP -> host
+```
+
+* `java.util.concurrent.ArrayBlockingQueue` provides the bounded FIFO. ONE writer
+  drains it with `take()` and flushes every frame immediately - no batching timer,
+  gesture-end buffering or thread per MOVE. HELLO is installed first, before any
+  producer can enqueue a command. Single-touch and pinch actions keep their
+  original order, coordinates and timestamps.
+* The reader does DNS/connect and all reads. If writes stall, the producer still
+  returns without waiting for the network. A full queue **fails the connection
+  visibly** instead of growing forever or silently skipping pointer transitions.
+* Disconnect invalidates the session immediately, drops pending commands and
+  closes its socket on a separate background closer (closing the socket releases
+  blocked reads/writes; an interrupt alone does not). TCP EOF already means
+  disconnect to the host, so there is no inline BYE write anymore.
+* A reconnect gets a new socket, FIFO, workers and state. Main-thread callbacks
+  recheck session identity when delivered, so an old failure or queued WELCOME
+  cannot clear/revive the new session. No StrictMode policy is relaxed.
+
+`GuestConnectionTest` runs the actual transport with real loopback TCP and with
+socket doubles that block until closed. It asserts that connect, write, flush
+and close never run on the producer thread, preserves command/pinch ordering,
+checks blocked-I/O cancellation, overflow, EOF and reconnect isolation, and
+checks the compiled controller cannot bypass this transport with direct socket
+or codec calls. That last guard fails against the original vc14 class bytes.
+There is still no Android runtime here: the phone's StrictMode behaviour itself
+must be checked on-device, not inferred from these JVM tests.
 
 ### 4. Controls: the three-state bar, navigation, media and the clipboard bridge
 
@@ -910,12 +967,12 @@ Two version-sensitive details, both pinned by tests or verified:
   (`writeInt(1)` + `writeToParcel(event)`, mode `0` = async, reply = `readException`
   + int) - taken from a decompiled AOSP `IInputManager$Stub$Proxy`.
 * The **transaction code is positional** in this classic AIDL and moves between
-  releases: 5 up to Android 7.1, 8 through 12L, 9 on 13, 12 on 14, 11 on 15/16.
-  `InputCodes` holds that table (each value counted from the version's LineageOS
-  tag) and answers -1 for anything uncounted - and -1 means *do not guess*: the
-  caller falls back to `dispatchGesture` for good. Any refusal, unknown code or
-  dead binder sets the same sticky fallback, so the worst case is the behaviour
-  we already shipped, never a crash. Guest event timestamps are remapped onto the
+  releases: 5 up to Android 7.1, 8 through 12L, 9 on 13, **10 on stock 14 /
+  12 on Lineage 14**, 11 on 15/16. `InputCodes` returns ordered candidates
+  (stock first, Lineage first on Lineage builds); `ShellTouch` caches the first
+  accepted candidate. An uncounted SDK has no candidates, and exhausting the
+  candidates or losing the binder disables streaming with an explicit log reason
+  and falls back to `dispatchGesture`. Guest event timestamps are remapped onto the
   host's clock (monotonically) so VelocityTracker still reads the flick's real
   speed and flings land correctly.
 
@@ -999,15 +1056,16 @@ before anything is signed or shipped.
 
 ## Tests
 
-`net/`, `host/TouchInjector`, `guest/ControlsConfig` and `util/ApiLevels` deliberately
-import nothing from `android.*`, so the wire format, the gesture planner, the control-bar
-rules **and the version policy** can be tested on a plain JVM - no device, no emulator:
+`net/`, `host/TouchInjector`, `guest/GuestConnection`, `guest/ControlsConfig` and
+`util/ApiLevels` deliberately import nothing from `android.*`, so the wire format,
+the socket transport, the gesture planner, the control-bar rules **and the version policy**
+can be tested on a plain JVM - no device, no emulator:
 
 ```bash
 bash toolchain/test.sh app --source 8
 # JUnit version 4.13.2
 # ...............................................................................
-# OK (118 tests)
+# OK (133 tests)
 ```
 
 What is covered:
@@ -1028,18 +1086,23 @@ What is covered:
   truncates ASCII exactly at the cap, and never splits a multi-byte character (the raw cut
   lands inside a 3-byte `EUR` - the boundary back-off is what keeps U+FFFD off the other
   phone's clipboard).
-* `TouchInjectorTest` (23 tests) - tap and drag planning, the slop rules (a sub-12 px wobble
+* `TouchInjectorTest` (28 tests) - tap and drag planning, the slop rules (a sub-12 px wobble
   during a press must **not** move the tap or shorten its duration - a real bug this caught),
   the 40 ms/30 s duration clamps, monotonic non-decreasing offsets, point reduction past 64,
   a MOVE arriving with no DOWN, `reset()` producing a CANCEL, coordinate clamping at the
-  screen edges, and a full scroll round trip from one normalised `MOVE` to one stroke.
+  screen edges, a full scroll round trip from one normalised `MOVE` to one stroke,
+  and two-pointer pinch/tap planning, mid-gesture joining and cancel hygiene.
 * `ApiLevelsTest` (6 tests) - the version policy at every boundary: 9 is unsupported, 19
   and 20 are guest-only, 21-23 mirror without being controllable, 24 is the first that does
   everything, 24 through 35 all can.
-* `InputCodesTest` (4 tests) - the per-version binder transaction codes for
-  `IInputManager.injectInputEvent`, pinned value by value (a wrong number would
-  aim our parcel at a different input-service method) plus "unknown versions
-  answer -1 instead of guessing".
+* `InputCodesTest` (6 tests) - the per-version candidate codes for
+  `IInputManager.injectInputEvent`, including stock Android 14 `[10, 12]` versus
+  Lineage `[12, 10]`, plus unknown versions returning no candidates.
+* `GuestConnectionTest` (15 tests) - the actual socket transport: off-caller
+  connect/write/flush/close, HELLO-first FIFO including single/pinch, navigation,
+  clipboard and watchdog PING, concurrent producers, blocked write/dial cancellation,
+  queue overflow, idempotent start/close, write/connect failures, reconnect isolation,
+  real TCP round-trip/EOF, plus a bytecode guard against direct controller I/O.
 * `ControlsConfigTest` (6 tests) - the control bar's pure rules: the expand/collapse
   walk (with its floors and ceilings), per-state button selection in canonical order,
   settings CSV round-trips that drop unknown ids and deduplicate, first-run defaults
@@ -1077,6 +1140,7 @@ phones.
 
 | symptom | cause |
 |---|---|
+| Guest crashes on touch/navigation/clipboard or disconnect: `NetworkOnMainThreadException` (vc14) | The guest wrote socket frames inline on the UI thread. `synchronized` prevents interleaving, not main-thread I/O; `catch (IOException)` cannot catch this unchecked exception. vc15 routes ALL sends through `GuestConnection`'s bounded FIFO and single writer, and closes TCP off-main on disconnect. Update the **guest to vc15**; a vc14 host is compatible (no wire change). Do not disable StrictMode or change Shizuku grants to work around this. |
 | Guest list is empty | mDNS blocked (AP isolation) - type the IP shown on the host instead. Both phones must be on the *same* network, and "guest WiFi" networks usually isolate clients from each other. |
 | "that does not look like an IP address" | the guest needs `192.168.x.x`, not a hostname. |
 | Black screen in a secure app | expected: `AUTO_MIRROR` is distrusted by the system for banking/DRM windows. Switch the host to `PUBLIC` mode. On Android 14+ the system asks you to confirm screen capture once more when the mode changes mid-session - that is the OS's one-capture-per-consent rule, not a malfunction. |

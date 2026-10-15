@@ -70,8 +70,12 @@ SOURCE=8            # 8 = compile against the real Android API surface (see RECI
 # before the Lineage one (API 34 stock is 10 - the old table's 12 landed on
 # verifyInputEvent and silently disabled streaming); two-finger pinch is on the
 # wire (actions 4/5/6) for both injection paths.
-VERSION_CODE=14
-VERSION_NAME=0.2.13-androidx
+# vc15: fix the guest's NetworkOnMainThreadException (first touch on the
+# non-KitKat guest). A synchronized socket write still runs on the caller's
+# thread: all outbound frames now use GuestConnection's bounded FIFO + one
+# writer. Even disconnect closes in the background; reconnects are isolated.
+VERSION_CODE=15
+VERSION_NAME=0.2.14-androidx
 MODE="release"      # release | debug | both
 PUBLISH=0
 RUN_TESTS=1

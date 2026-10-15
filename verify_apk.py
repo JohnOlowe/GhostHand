@@ -70,6 +70,8 @@ REQUIRED_CLASSES = [
     "damjay/control/ghosthand/host/TouchInjector",
     # guest side
     "damjay/control/ghosthand/guest/GuestController",
+    # Owns every outbound write, including UI touch/clipboard/navigation commands.
+    "damjay/control/ghosthand/guest/GuestConnection",
     "damjay/control/ghosthand/guest/VideoDecoder",
 ]
 
