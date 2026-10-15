@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Translucent pill used for the guest's floating status readout. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#CC101418" />
+    <corners android:radius="20dp" />
+    <stroke
+        android:width="1dp"
+        android:color="@color/border" />
+</shape>
