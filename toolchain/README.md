@@ -38,6 +38,9 @@ Gradle layout (`src/main/AndroidManifest.xml`, `src/main/res`, `src/main/java`).
 | `zipalign.py` | pure-Python zipalign (rewrite + `-c` check), since build-tools is unreachable |
 | `filter_android_jar.py` | strips JRE-owned packages from android.jar for `-source 11/17` |
 | `reverse-tools.sh` | temporary external bootstrap + smoke tests/CLI for JADX, Apktool, and CFR; removes tools on exit |
+| `python-ui-inspect.sh` | temporary, hash-verified PySide6 bootstrap + offscreen widget screenshot/property smoke test |
+| `python_ui_inspect.py` | captures a PySide6 QWidget PNG and emits its geometry, layout, style, palette, font, and state as JSON |
+| `python_ui_shims.py` | builds temporary CPU-only link shims for the sandbox's missing Qt runtime libraries; not a real GL/EGL/input runtime |
 | `lambda-stubs/` | the one class `android.jar` lacks (`LambdaMetafactory`); `setup.sh` compiles it into `vendor/core-lambda-stubs.jar` |
 | `androidx.sh` | fetches AndroidX and assembles `vendor/androidx/` (one-off, needs the network) |
 | `androidx_fetch.py` | blobless clone of the source repo + fetch of the selected AARs/jars |
